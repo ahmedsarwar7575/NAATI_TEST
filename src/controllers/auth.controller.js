@@ -3,6 +3,7 @@ import { hashPassword, verifyPassword } from "../utils/password.js";
 import { generateOtp, otpExpiryDate, isOtpValid } from "../utils/otp.js";
 import { signJwt } from "../utils/jwt.js";
 import { env } from "../config/env.js";
+import sendEmailFunc from "../utils/email.js";
 
 function safeUser(user) {
   return {
@@ -46,7 +47,7 @@ export async function register(req, res, next) {
       otpExpiresAt: otpExpiryDate(),
       isVerified: false
     });
-
+    sendEmailFunc(email, "Verify your account", `<p>OTP: ${otp}</p>`);
     const data = { user: safeUser(user) };
     if (env.appEnv === "development") data.otp = otp;
 
@@ -94,7 +95,7 @@ export async function resendOtp(req, res, next) {
     user.otpCode = otp;
     user.otpExpiresAt = otpExpiryDate();
     await user.save();
-
+    sendEmailFunc(email, "Verify your account", `<p>OTP: ${otp}</p>`);
     const data = {};
     if (env.appEnv === "development") data.otp = otp;
 
@@ -138,6 +139,7 @@ export async function forgotPassword(req, res, next) {
     if (!user) return res.status(404).json({ success: false, message: "User not found" });
 
     const otp = generateOtp();
+    sendEmailFunc(email, "Verify your account", `<p>OTP: ${otp}</p>`);
     user.resetOtpCode = otp;
     user.resetOtpExpiresAt = otpExpiryDate();
     await user.save();
