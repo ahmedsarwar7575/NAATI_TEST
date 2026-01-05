@@ -5,7 +5,7 @@ import "./models/index.js";
 
 async function start() {
   await sequelize.authenticate();
-  await sequelize.sync({ alter: env.appEnv === "development" });
+  await sequelize.sync();
 
   app.listen(env.port, () => {
     console.log(`Server running on ${env.port}\n`);

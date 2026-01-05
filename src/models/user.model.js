@@ -19,6 +19,7 @@ export const User = sequelize.define(
 
     otpCode: { type: DataTypes.STRING(10), allowNull: true },
     otpExpiresAt: { type: DataTypes.DATE, allowNull: true },
+    role: { type: DataTypes.ENUM("admin", "user"), allowNull: false, defaultValue: "user" },
 
     resetOtpCode: { type: DataTypes.STRING(10), allowNull: true },
     resetOtpExpiresAt: { type: DataTypes.DATE, allowNull: true }

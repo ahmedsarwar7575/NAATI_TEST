@@ -15,7 +15,8 @@ function safeUser(user) {
     naatiCclExamDate: user.naatiCclExamDate,
     isVerified: user.isVerified,
     createdAt: user.createdAt,
-    updatedAt: user.updatedAt
+    updatedAt: user.updatedAt,
+    role: user.role
   };
 }
 
@@ -115,15 +116,19 @@ export async function login(req, res, next) {
     const user = await models.User.findOne({
       where: emailOrPhone.includes("@") ? { email: emailOrPhone } : { phone: emailOrPhone }
     });
-
+    
     if (!user) return res.status(401).json({ success: false, message: "Invalid credentials" });
     if (!user.isVerified) return res.status(403).json({ success: false, message: "Verify OTP first" });
 
     const ok = await verifyPassword(password, user.passwordHash);
     if (!ok) return res.status(401).json({ success: false, message: "Invalid credentials" });
-
-    const token = signJwt({ role: "user", userId: user.id });
-
+    let token;
+    if (user.role === "admin"){
+     token = signJwt({ role: "admin", userId: user.id });
+    }
+    else{
+     token = signJwt({ role: "user", userId: user.id });
+    }
     return res.json({ success: true, message: "Logged in", data: { token, user: safeUser(user) } });
   } catch (err) {
     return next(err);
