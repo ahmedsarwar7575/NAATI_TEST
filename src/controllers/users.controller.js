@@ -60,10 +60,6 @@ export async function getUser(req, res, next) {
     const user = await models.User.findByPk(id);
     if (!user) return res.status(404).json({ success: false, message: "User not found" });
 
-    const isAdmin = req.auth?.role === "admin";
-    const isSelf = String(req.auth?.userId) === String(user.id);
-
-    if (!isAdmin && !isSelf) return res.status(403).json({ success: false, message: "Forbidden" });
 
     return res.json({ success: true, data: { user: safeUser(user) } });
   } catch (err) {
@@ -77,10 +73,6 @@ export async function updateUser(req, res, next) {
     const user = await models.User.findByPk(id);
     if (!user) return res.status(404).json({ success: false, message: "User not found" });
 
-    const isAdmin = req.auth?.role === "admin";
-    const isSelf = String(req.auth?.userId) === String(user.id);
-
-    if (!isAdmin && !isSelf) return res.status(403).json({ success: false, message: "Forbidden" });
 
     const { name, phone, preferredLanguage, naatiCclExamDate, password, isVerified } = req.body;
 
@@ -90,7 +82,7 @@ export async function updateUser(req, res, next) {
     if (naatiCclExamDate !== undefined) user.naatiCclExamDate = naatiCclExamDate || null;
 
     if (password !== undefined) user.passwordHash = await hashPassword(password);
-    if (isVerified !== undefined && isAdmin) user.isVerified = Boolean(isVerified);
+    if (isVerified !== undefined ) user.isVerified = Boolean(isVerified);
 
     await user.save();
     return res.json({ success: true, data: { user: safeUser(user) } });
