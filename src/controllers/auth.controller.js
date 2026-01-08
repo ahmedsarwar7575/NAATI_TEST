@@ -118,7 +118,7 @@ export async function login(req, res, next) {
     });
     
     if (!user) return res.status(401).json({ success: false, message: "Invalid credentials" });
-    if (!user.isVerified) return res.status(403).json({ success: false, message: "Verify OTP first" });
+    if (!user.isVerified) return res.status(403).json({ success: false, message: "Verify OTP first", user: safeUser(user)  });
 
     const ok = await verifyPassword(password, user.passwordHash);
     if (!ok) return res.status(401).json({ success: false, message: "Invalid credentials" });
