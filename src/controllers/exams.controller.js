@@ -1,4 +1,6 @@
 import { models } from "../models/index.js";
+import OpenAI from "openai";
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 const { ExamAttempt, Dialogue, Segment, SegmentAttempt } = models;
 
@@ -140,6 +142,116 @@ export const deleteExam = async (req, res, next) => {
     });
 
     return res.json({ success: true, message: "Deleted" });
+  } catch (e) {
+    next(e);
+  }
+};
+
+const toNumberOrNull = (v) => {
+  if (v === null || v === undefined) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+};
+
+const avgOfField = (segments, field) => {
+  let sum = 0;
+  let count = 0;
+
+  for (const seg of segments) {
+    const s = typeof seg.get === "function" ? seg.get() : seg;
+    const val = toNumberOrNull(s[field]);
+    if (val !== null) {
+      sum += val;
+      count++;
+    }
+  }
+
+  return count ? Number((sum / count).toFixed(2)) : null;
+};
+
+const buildFeedbackNotes = (segments) => {
+  return segments
+    .map((seg, i) => {
+      const s = typeof seg.get === "function" ? seg.get() : seg;
+
+      const texts = [
+        s.accuracyText && `Accuracy: ${s.accuracyText}`,
+        s.languageQualityText && `Language: ${s.languageQualityText}`,
+        s.fluencyPronunciationText && `Fluency: ${s.fluencyPronunciationText}`,
+        s.deliveryCoherenceText && `Delivery: ${s.deliveryCoherenceText}`,
+        s.culturalControlText && `Culture: ${s.culturalControlText}`,
+        s.responseManagementText &&
+          `Response mgmt: ${s.responseManagementText}`,
+        s.oneLineFeedback && `One-line: ${s.oneLineFeedback}`,
+      ].filter(Boolean);
+
+      return texts.length ? `Segment ${i + 1}: ${texts.join(" | ")}` : null;
+    })
+    .filter(Boolean)
+    .join("\n");
+};
+
+export const computeResult = async (req, res, next) => {
+  try {
+    const examAttemptId = toInt(req.params.examAttemptId);
+
+    const segments = await SegmentAttempt.findAll({
+      where: { exam_attempt_id: examAttemptId },
+      order: [["createdAt", "ASC"]],
+    });
+
+    const averages = {
+      accuracyScore: avgOfField(segments, "accuracyScore"),
+      languageQualityScore: avgOfField(segments, "languageQualityScore"),
+      fluencyPronunciationScore: avgOfField(
+        segments,
+        "fluencyPronunciationScore"
+      ),
+      deliveryCoherenceScore: avgOfField(segments, "deliveryCoherenceScore"),
+      culturalControlScore: avgOfField(segments, "culturalControlScore"),
+      responseManagementScore: avgOfField(segments, "responseManagementScore"),
+      finalScore: avgOfField(segments, "finalScore"),
+      totalRawScore: avgOfField(segments, "totalRawScore"),
+    };
+
+    if (!segments.length) {
+      return res.json({
+        segments,
+        summary: { segmentCount: 0, averages, overallFeedback: null },
+      });
+    }
+
+    let notes = buildFeedbackNotes(segments);
+
+    const MAX_CHARS = 12000;
+    if (notes.length > MAX_CHARS)
+      notes = notes.slice(0, MAX_CHARS) + "\n...(truncated)";
+
+    const prompt = [
+      `Averages (0–?? scale depending on your rubric): ${JSON.stringify(
+        averages
+      )}`,
+      `Per-segment feedback notes:`,
+      notes,
+    ].join("\n\n");
+
+    const ai = await openai.responses.create({
+      model: "gpt-5.2",
+      instructions:
+        "You are an English speaking exam evaluator. Read the per-segment feedback notes and averages, then write overall feedback in 5 to 7 short lines. Mention patterns across segments, 2 strengths, 2 improvement areas, and 1 specific actionable next step. Do not repeat the notes verbatim. No headings.",
+      input: prompt,
+    });
+
+    const overallFeedback = (ai.output_text || "").trim();
+
+    return res.json({
+      summary: {
+        segmentCount: segments.length,
+        averages,
+        overallFeedback,
+      },
+      segments
+    });
   } catch (e) {
     next(e);
   }

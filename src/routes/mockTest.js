@@ -9,6 +9,6 @@ const upload = multer({
   limits: { fileSize: 25 * 1024 * 1024 },
 });
 
-router.post("/ai-exam", requireAuth, upload.single("userAudio"), runAiExam);
+router.post("/ai-exam", upload.single("userAudio"), runAiExam);
 
 export default router;

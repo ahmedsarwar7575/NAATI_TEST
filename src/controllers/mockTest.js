@@ -276,7 +276,7 @@ export const runAiExam = async (req, res, next) => {
 
     const referenceTranscript = refAudio ? await transcribeWithOpenAI({ buffer: refAudio.buffer, mimetype: refAudio.mimetype, language }) : "";
     const suggestedTranscript = sugAudio ? await transcribeWithOpenAI({ buffer: sugAudio.buffer, mimetype: sugAudio.mimetype, language }) : "";
-    const studentTranscript = audioTranscript || (await transcribeWithOpenAI({ buffer: userAudio.buffer, mimetype: userAudio.mimetype, language }));
+    const studentTranscript =  await transcribeWithOpenAI({ buffer: userAudio.buffer, mimetype: userAudio.mimetype, language });
 
     const combinedTranscript =
       `SEGMENT:\n` +
