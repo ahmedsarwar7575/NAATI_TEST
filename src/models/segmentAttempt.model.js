@@ -1,10 +1,16 @@
 import { DataTypes } from "sequelize";
-import {sequelize} from "../config/db.js";
+import { sequelize } from "../config/db.js";
 
 const SegmentAttempt = sequelize.define(
   "SegmentAttempt",
   {
-    id: { type: DataTypes.BIGINT.UNSIGNED, defaultValue: DataTypes.UUIDV4, primaryKey: true },
+    id: {
+      type: DataTypes.BIGINT.UNSIGNED,
+      primaryKey: true,
+      autoIncrement: true,
+      allowNull: false,
+    },
+
     examAttemptId: { type: DataTypes.BIGINT.UNSIGNED, allowNull: false },
     userId: { type: DataTypes.BIGINT.UNSIGNED, allowNull: false },
     segmentId: { type: DataTypes.BIGINT.UNSIGNED, allowNull: false },
@@ -21,7 +27,10 @@ const SegmentAttempt = sequelize.define(
     languageQualityScore: { type: DataTypes.DECIMAL(10, 2), allowNull: true },
     languageQualityText: { type: DataTypes.TEXT, allowNull: true },
 
-    fluencyPronunciationScore: { type: DataTypes.DECIMAL(10, 2), allowNull: true },
+    fluencyPronunciationScore: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: true,
+    },
     fluencyPronunciationText: { type: DataTypes.TEXT, allowNull: true },
 
     deliveryCoherenceScore: { type: DataTypes.DECIMAL(10, 2), allowNull: true },
@@ -30,7 +39,10 @@ const SegmentAttempt = sequelize.define(
     culturalControlScore: { type: DataTypes.DECIMAL(10, 2), allowNull: true },
     culturalControlText: { type: DataTypes.TEXT, allowNull: true },
 
-    responseManagementScore: { type: DataTypes.DECIMAL(10, 2), allowNull: true },
+    responseManagementScore: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: true,
+    },
     responseManagementText: { type: DataTypes.TEXT, allowNull: true },
 
     totalRawScore: { type: DataTypes.DECIMAL(10, 2), allowNull: true },
@@ -39,15 +51,18 @@ const SegmentAttempt = sequelize.define(
     oneLineFeedback: { type: DataTypes.TEXT, allowNull: true },
     language: { type: DataTypes.TEXT, allowNull: true },
 
-    repeatCount: { type: DataTypes.INTEGER, allowNull: true, defaultValue: 1 }
+    repeatCount: { type: DataTypes.INTEGER, allowNull: true, defaultValue: 1 },
   },
   {
     tableName: "segment_attempts",
     underscored: true,
     timestamps: true,
     indexes: [
-      { unique: true, fields: ["exam_attempt_id", "segment_id", "repeat_count"] }
-    ]
+      {
+        unique: true,
+        fields: ["exam_attempt_id", "segment_id", "repeat_count"],
+      },
+    ],
   }
 );
 

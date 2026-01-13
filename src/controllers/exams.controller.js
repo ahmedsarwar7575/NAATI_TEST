@@ -45,7 +45,7 @@ export const startExam = async (req, res, next) => {
       return res.status(404).json({ message: "Dialogue not found" });
 
     const attempt = await ExamAttempt.create({
-      userId: req.user.id,
+      userId: req.body.userId,
       dialogueId: dialogueIdNum,
       examType,
       status: "in_progress",
@@ -58,6 +58,7 @@ export const startExam = async (req, res, next) => {
 
     return res.status(201).json({ attempt, dialogue, segments });
   } catch (e) {
+    console.error(e);
     next(e);
   }
 };

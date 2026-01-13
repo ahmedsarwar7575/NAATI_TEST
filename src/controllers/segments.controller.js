@@ -19,7 +19,7 @@ export async function createSegment(req, res, next) {
 
     const dialogueIdNum = toInt(dialogueId);
     const segmentOrderNum = toInt(segmentOrder);
-
+    console.log(req.body);
     if (!dialogueIdNum || !textContent || segmentOrderNum === undefined) {
       return res
         .status(400)
@@ -32,8 +32,8 @@ export async function createSegment(req, res, next) {
         .status(400)
         .json({ success: false, message: "Invalid dialogueId" });
 
-    const audioFile = req.files?.audio?.[0];
-    const suggestedFile = req.files?.suggestedAudio?.[0];
+    const audioFile = req.files?.audioUrl?.[0];
+    const suggestedFile = req.files?.suggestedAudioUrl?.[0];
 
     let finalAudioUrl = audioUrl || null;
     let finalSuggestedAudioUrl = suggestedAudioUrl || null;
@@ -68,6 +68,7 @@ export async function createSegment(req, res, next) {
 
     return res.status(201).json({ success: true, data: { segment } });
   } catch (e) {
+    console.log(e);
     return next(e);
   }
 }

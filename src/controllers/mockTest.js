@@ -207,6 +207,7 @@ Return only JSON that matches the schema.
       text: {
         format: {
           type: "json_schema",
+          name: "naati_score",
           strict: true,
           schema: scoreSchema
         }
@@ -229,13 +230,14 @@ export const runAiExam = async (req, res, next) => {
   try {
     const file = req.file;
     if (!file?.buffer) return res.status(400).json({ success: false, message: "userAudio file is required" });
-
+    const token = req.headers.authorization;  
+    // console.log(token)
     const segmentId = toInt(req.body.segmentId);
     const dialogueId = toInt(req.body.dialogueId);
     const language = req.body.language ? String(req.body.language) : null;
     const audioTranscript = req.body.audioTranscript ? String(req.body.audioTranscript) : null;
-
-    const authUserId = req.user?.id;
+    const authUserId = req.body.userId;
+    // console.log("authUserId", authUserId)
     if (!authUserId) return res.status(401).json({ success: false, message: "Unauthorized" });
 
     if (!segmentId) return res.status(400).json({ success: false, message: "segmentId is required" });
