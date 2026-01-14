@@ -4,7 +4,11 @@ import { sequelize } from "../config/db.js";
 export const User = sequelize.define(
   "User",
   {
-    id: { type: DataTypes.BIGINT.UNSIGNED, autoIncrement: true, primaryKey: true },
+    id: {
+      type: DataTypes.BIGINT.UNSIGNED,
+      autoIncrement: true,
+      primaryKey: true,
+    },
 
     name: { type: DataTypes.STRING(120), allowNull: false },
     email: { type: DataTypes.STRING(190), allowNull: false, unique: true },
@@ -15,18 +19,31 @@ export const User = sequelize.define(
     preferredLanguage: { type: DataTypes.STRING(60), allowNull: false },
     naatiCclExamDate: { type: DataTypes.DATEONLY, allowNull: true },
 
-    isVerified: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
-
+    isVerified: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+    },
+    stripeCustomerId: {
+      type: DataTypes.STRING(64),
+      allowNull: true,
+      unique: true,
+      field: "stripe_customer_id",
+    },
     otpCode: { type: DataTypes.STRING(10), allowNull: true },
     otpExpiresAt: { type: DataTypes.DATE, allowNull: true },
-    role: { type: DataTypes.ENUM("admin", "user"), allowNull: false, defaultValue: "user" },
+    role: {
+      type: DataTypes.ENUM("admin", "user"),
+      allowNull: false,
+      defaultValue: "user",
+    },
 
     resetOtpCode: { type: DataTypes.STRING(10), allowNull: true },
-    resetOtpExpiresAt: { type: DataTypes.DATE, allowNull: true }
+    resetOtpExpiresAt: { type: DataTypes.DATE, allowNull: true },
   },
   {
     tableName: "users",
     timestamps: true,
-    underscored: true
+    underscored: true,
   }
 );

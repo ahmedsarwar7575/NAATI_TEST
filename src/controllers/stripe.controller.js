@@ -1,36 +1,203 @@
 import Stripe from "stripe";
 import dotenv from "dotenv";
+import { sequelize } from "../config/db.js";
+import { User } from "../models/user.model.js";
+import { Subscription } from "../models/subscription.model.js";
+import { Transaction } from "../models/transaction.model.js";
 
 dotenv.config();
+
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+
+function priceIdFromType(type) {
+  if (type === "one") return process.env.STRIPE_MONTHLY_PRICE_ID;
+  if (type === "two") return process.env.STRIPE_TWO_MONTHLY_PRICE_ID;
+  if (type === "three") return process.env.STRIPE_THREE_MONTHLY_PRICE_ID;
+  return null;
+}
+
+function unixToDate(sec) {
+  if (!sec) return null;
+  return new Date(sec * 1000);
+}
+
+function getCurrentPeriodEndFromSub(sub) {
+  return unixToDate(sub?.items?.data?.[0]?.current_period_end);
+}
+
+function getPriceIdFromSub(sub) {
+  return sub?.items?.data?.[0]?.price?.id || null;
+}
+
+function getPriceIdFromInvoice(inv) {
+  return inv?.lines?.data?.[0]?.price?.id || null;
+}
+
+async function upsertSubscriptionRow(
+  {
+    userId,
+    stripeCustomerId,
+    stripeSubscriptionId,
+    status,
+    cancelAtPeriodEnd,
+    currentPeriodEnd,
+    stripePriceId,
+  },
+  t
+) {
+  const existing = await Subscription.findOne({
+    where: { stripeSubscriptionId },
+    transaction: t,
+  });
+
+  const data = {
+    userId,
+    stripeCustomerId,
+    stripeSubscriptionId,
+    stripePriceId,
+    status,
+    cancelAtPeriodEnd: !!cancelAtPeriodEnd,
+    currentPeriodEnd,
+  };
+
+  if (existing) {
+    await existing.update(data, { transaction: t });
+    return existing;
+  }
+
+  return Subscription.create(data, { transaction: t });
+}
+
+async function resolveUserId({ stripeSub, stripeCustomerId }, t) {
+  const metaUserId = stripeSub?.metadata?.userId
+    ? Number(stripeSub.metadata.userId)
+    : null;
+  if (metaUserId) return metaUserId;
+
+  if (stripeCustomerId) {
+    const user = await User.findOne({
+      where: { stripeCustomerId },
+      transaction: t,
+    });
+    if (user) return user.id;
+  }
+
+  return null;
+}
+
+async function upsertTransactionRow(
+  {
+    userId,
+    stripeInvoiceId,
+    stripeCustomerId,
+    stripeSubscriptionId,
+    stripePriceId,
+    amount,
+    currency,
+    status,
+    paidAt,
+  },
+  t
+) {
+  await Transaction.upsert(
+    {
+      userId,
+      stripeInvoiceId,
+      stripeCustomerId,
+      stripeSubscriptionId,
+      stripePriceId,
+      amount,
+      currency,
+      status,
+      paidAt,
+    },
+    { transaction: t }
+  );
+}
+
+async function handleInvoiceCreateTransaction({ invoiceId, txStatus }) {
+  const inv = await stripe.invoices.retrieve(invoiceId, {
+    expand: ["lines.data.price"],
+  });
+
+  const stripeCustomerId = inv.customer;
+  const stripeSubscriptionId = inv.subscription;
+
+  if (!stripeSubscriptionId) return;
+
+  const sub = await stripe.subscriptions.retrieve(stripeSubscriptionId, {
+    expand: ["items.data.price"],
+  });
+
+  await sequelize.transaction(async (t) => {
+    const userId = await resolveUserId({ stripeSub: sub, stripeCustomerId }, t);
+    if (!userId) return;
+
+    await User.update(
+      { stripeCustomerId },
+      { where: { id: userId }, transaction: t }
+    );
+
+    const currentPeriodEnd = getCurrentPeriodEndFromSub(sub);
+    const stripePriceIdFromSub = getPriceIdFromSub(sub);
+    const stripePriceIdFromInv = getPriceIdFromInvoice(inv);
+
+    await upsertSubscriptionRow(
+      {
+        userId,
+        stripeCustomerId,
+        stripeSubscriptionId: sub.id,
+        status: sub.status,
+        cancelAtPeriodEnd: sub.cancel_at_period_end,
+        currentPeriodEnd,
+        stripePriceId: stripePriceIdFromSub || stripePriceIdFromInv,
+      },
+      t
+    );
+
+    await upsertTransactionRow(
+      {
+        userId,
+        stripeInvoiceId: inv.id,
+        stripeCustomerId,
+        stripeSubscriptionId,
+        stripePriceId: stripePriceIdFromInv || stripePriceIdFromSub,
+        amount:
+          txStatus === "paid" ? inv.amount_paid || 0 : inv.amount_due || 0,
+        currency: inv.currency || "usd",
+        status: txStatus,
+        paidAt:
+          txStatus === "paid"
+            ? unixToDate(inv.status_transitions?.paid_at)
+            : null,
+      },
+      t
+    );
+  });
+}
 
 export async function createCheckoutSession(req, res) {
   try {
     const { type, userId, customerId } = req.body;
-    let priceId;
-    if (type === "one"){
-      priceId = process.env.STRIPE_MONTHLY_PRICE_ID;
-    }
-    if (type === "two"){
-      priceId = process.env.STRIPE_TWO_MONTHLY_PRICE_ID;
-    }
-    if (type === "three"){
-      priceId = process.env.STRIPE_THREE_MONTHLY_PRICE_ID;
-    }
+
+    const priceId = priceIdFromType(type);
+    if (!priceId) return res.status(400).json({ error: "Invalid type" });
+    if (!userId) return res.status(400).json({ error: "userId required" });
+
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
       line_items: [{ price: priceId, quantity: 1 }],
       success_url: `${process.env.APP_URL}/success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${process.env.APP_URL}/cancel`,
-      client_reference_id: userId ? String(userId) : undefined,
-      metadata: userId ? { userId: String(userId) } : undefined,
-      customer: customerId || undefined
+      client_reference_id: String(userId),
+      metadata: { userId: String(userId), planType: String(type) },
+      subscription_data: {
+        metadata: { userId: String(userId), planType: String(type) },
+      },
+      customer: customerId || undefined,
     });
 
-    return res.status(200).json({
-      sessionId: session.id,
-      url: session.url
-    });
+    return res.status(200).json({ sessionId: session.id, url: session.url });
   } catch (err) {
     return res.status(400).json({ error: err.message });
   }
@@ -38,37 +205,129 @@ export async function createCheckoutSession(req, res) {
 
 export async function verifyCheckoutSession(req, res) {
   try {
-    const sessionId = req.query.session_id || req.body.sessionId || req.body.session_id;
-    if (!sessionId) return res.status(400).json({ error: "session_id required" });
+    const sessionId =
+      req.query.session_id || req.body.sessionId || req.body.session_id;
+    if (!sessionId)
+      return res.status(400).json({ error: "session_id required" });
 
     const session = await stripe.checkout.sessions.retrieve(sessionId, {
-      expand: ["subscription", "customer"]
+      expand: ["subscription"],
     });
 
-    const lineItems = await stripe.checkout.sessions.listLineItems(sessionId, { limit: 10 });
-
-    const subscription = session.subscription && typeof session.subscription === "object"
-      ? session.subscription
-      : null;
+    const subscription =
+      session.subscription && typeof session.subscription === "object"
+        ? session.subscription
+        : null;
 
     const paid =
       session.status === "complete" &&
       (session.payment_status === "paid" ||
-        (subscription && (subscription.status === "active" || subscription.status === "trialing")));
+        (subscription &&
+          (subscription.status === "active" ||
+            subscription.status === "trialing")));
+
+    let transactionCreated = false;
+
+    if (paid && subscription) {
+      const userId = session.metadata?.userId
+        ? Number(session.metadata.userId)
+        : null;
+
+      const stripeCustomerId =
+        typeof session.customer === "string"
+          ? session.customer
+          : session.customer?.id;
+
+      await sequelize.transaction(async (t) => {
+        if (userId && stripeCustomerId) {
+          await User.update(
+            { stripeCustomerId },
+            { where: { id: userId }, transaction: t }
+          );
+        }
+
+        const currentPeriodEnd = getCurrentPeriodEndFromSub(subscription);
+        const stripePriceId = getPriceIdFromSub(subscription);
+
+        if (userId && stripeCustomerId) {
+          await upsertSubscriptionRow(
+            {
+              userId,
+              stripeCustomerId,
+              stripeSubscriptionId: subscription.id,
+              status: subscription.status,
+              cancelAtPeriodEnd: subscription.cancel_at_period_end,
+              currentPeriodEnd,
+              stripePriceId,
+            },
+            t
+          );
+        }
+
+        if (userId && stripeCustomerId) {
+          const fullSub = await stripe.subscriptions.retrieve(subscription.id, {
+            expand: ["latest_invoice.lines.data.price", "items.data.price"],
+          });
+
+          let inv = fullSub.latest_invoice;
+
+          if (typeof inv === "string") {
+            inv = await stripe.invoices.retrieve(inv, {
+              expand: ["lines.data.price"],
+            });
+          }
+
+          if (!inv || !(inv.paid || inv.status === "paid")) {
+            const invList = await stripe.invoices.list({
+              subscription: subscription.id,
+              limit: 5,
+            });
+            inv =
+              invList.data.find((x) => x.paid || x.status === "paid") || null;
+            if (inv && typeof inv.id === "string") {
+              inv = await stripe.invoices.retrieve(inv.id, {
+                expand: ["lines.data.price"],
+              });
+            }
+          }
+
+          if (inv && (inv.paid || inv.status === "paid")) {
+            const invoicePriceId = inv?.lines?.data?.[0]?.price?.id || null;
+
+            await Transaction.upsert(
+              {
+                userId,
+                stripeInvoiceId: inv.id,
+                stripeCustomerId,
+                stripeSubscriptionId: subscription.id,
+                stripePriceId: invoicePriceId || stripePriceId,
+                amount: inv.amount_paid || 0,
+                currency: inv.currency || "usd",
+                status: "paid",
+                paidAt: unixToDate(inv.status_transitions?.paid_at),
+              },
+              { transaction: t }
+            );
+
+            transactionCreated = true;
+          }
+        }
+      });
+    }
 
     return res.status(200).json({
       paid,
+      transactionCreated,
       session: {
         id: session.id,
         status: session.status,
         payment_status: session.payment_status,
-        customer: session.customer && typeof session.customer === "object" ? session.customer.id : session.customer,
-        subscription: subscription ? subscription.id : session.subscription
+        customer:
+          typeof session.customer === "string"
+            ? session.customer
+            : session.customer?.id,
+        subscription: subscription ? subscription.id : session.subscription,
       },
-      items: lineItems.data.map(li => ({
-        priceId: li.price ? li.price.id : null,
-        quantity: li.quantity
-      }))
     });
   } catch (err) {
     return res.status(400).json({ error: err.message });
@@ -78,72 +337,137 @@ export async function verifyCheckoutSession(req, res) {
 export async function stripeWebhook(req, res) {
   try {
     const sig = req.headers["stripe-signature"];
+
     const event = stripe.webhooks.constructEvent(
       req.body,
       sig,
       process.env.STRIPE_WEBHOOK_SECRET
     );
 
-    if (event.type === "invoice.paid") {
-      const invoice = event.data.object;
-      const payload = {
-        type: "invoice.paid",
-        invoiceId: invoice.id,
-        customerId: invoice.customer,
-        subscriptionId: invoice.subscription,
-        billingReason: invoice.billing_reason,
-        status: invoice.status,
-        amountPaid: invoice.amount_paid,
-        currency: invoice.currency
-      };
-      if (typeof req.app?.locals?.onStripeEvent === "function") {
-        await req.app.locals.onStripeEvent(payload);
+    if (event.type === "checkout.session.completed") {
+      const session = event.data.object;
+
+      const userId = session.metadata?.userId
+        ? Number(session.metadata.userId)
+        : null;
+
+      const stripeCustomerId = session.customer;
+      const stripeSubscriptionId = session.subscription;
+
+      if (userId && stripeCustomerId) {
+        await User.update({ stripeCustomerId }, { where: { id: userId } });
       }
+
+      if (userId && stripeSubscriptionId) {
+        const sub = await stripe.subscriptions.retrieve(stripeSubscriptionId, {
+          expand: ["items.data.price", "latest_invoice"],
+        });
+
+        await sequelize.transaction(async (t) => {
+          const currentPeriodEnd = getCurrentPeriodEndFromSub(sub);
+          const stripePriceId = getPriceIdFromSub(sub);
+
+          await upsertSubscriptionRow(
+            {
+              userId,
+              stripeCustomerId,
+              stripeSubscriptionId: sub.id,
+              status: sub.status,
+              cancelAtPeriodEnd: sub.cancel_at_period_end,
+              currentPeriodEnd,
+              stripePriceId,
+            },
+            t
+          );
+        });
+
+        const latestInvoiceObj =
+          typeof sub.latest_invoice === "string"
+            ? await stripe.invoices.retrieve(sub.latest_invoice, {
+                expand: ["lines.data.price"],
+              })
+            : sub.latest_invoice;
+
+        if (
+          latestInvoiceObj?.id &&
+          (latestInvoiceObj?.paid || latestInvoiceObj?.status === "paid")
+        ) {
+          await sequelize.transaction(async (t) => {
+            await upsertTransactionRow(
+              {
+                userId,
+                stripeInvoiceId: latestInvoiceObj.id,
+                stripeCustomerId,
+                stripeSubscriptionId: sub.id,
+                stripePriceId:
+                  getPriceIdFromInvoice(latestInvoiceObj) || stripePriceId,
+                amount: latestInvoiceObj.amount_paid || 0,
+                currency: latestInvoiceObj.currency || "usd",
+                status: "paid",
+                paidAt: unixToDate(
+                  latestInvoiceObj.status_transitions?.paid_at
+                ),
+              },
+              t
+            );
+          });
+        }
+      }
+    }
+
+    if (
+      event.type === "customer.subscription.updated" ||
+      event.type === "customer.subscription.deleted" ||
+      event.type === "customer.subscription.created"
+    ) {
+      const sub = event.data.object;
+      const stripeCustomerId = sub.customer;
+
+      await sequelize.transaction(async (t) => {
+        const userId = await resolveUserId(
+          { stripeSub: sub, stripeCustomerId },
+          t
+        );
+        if (!userId) return;
+
+        await User.update(
+          { stripeCustomerId },
+          { where: { id: userId }, transaction: t }
+        );
+
+        const currentPeriodEnd = getCurrentPeriodEndFromSub(sub);
+        const stripePriceId = getPriceIdFromSub(sub);
+
+        await upsertSubscriptionRow(
+          {
+            userId,
+            stripeCustomerId,
+            stripeSubscriptionId: sub.id,
+            status: sub.status,
+            cancelAtPeriodEnd: sub.cancel_at_period_end,
+            currentPeriodEnd,
+            stripePriceId,
+          },
+          t
+        );
+      });
+    }
+
+    if (
+      event.type === "invoice.paid" ||
+      event.type === "invoice.payment_succeeded"
+    ) {
+      await handleInvoiceCreateTransaction({
+        invoiceId: event.data.object.id,
+        txStatus: "paid",
+      });
     }
 
     if (event.type === "invoice.payment_failed") {
-      const invoice = event.data.object;
-      const payload = {
-        type: "invoice.payment_failed",
-        invoiceId: invoice.id,
-        customerId: invoice.customer,
-        subscriptionId: invoice.subscription,
-        billingReason: invoice.billing_reason,
-        status: invoice.status,
-        attemptCount: invoice.attempt_count,
-        nextPaymentAttempt: invoice.next_payment_attempt
-      };
-      if (typeof req.app?.locals?.onStripeEvent === "function") {
-        await req.app.locals.onStripeEvent(payload);
-      }
-    }
-
-    if (event.type === "customer.subscription.deleted") {
-      const sub = event.data.object;
-      const payload = {
-        type: "customer.subscription.deleted",
-        subscriptionId: sub.id,
-        customerId: sub.customer,
-        status: sub.status
-      };
-      if (typeof req.app?.locals?.onStripeEvent === "function") {
-        await req.app.locals.onStripeEvent(payload);
-      }
-    }
-
-    if (event.type === "customer.subscription.updated") {
-      const sub = event.data.object;
-      const payload = {
-        type: "customer.subscription.updated",
-        subscriptionId: sub.id,
-        customerId: sub.customer,
-        status: sub.status,
-        currentPeriodEnd: sub.current_period_end,
-        cancelAtPeriodEnd: sub.cancel_at_period_end
-      };
-      if (typeof req.app?.locals?.onStripeEvent === "function") {
-        await req.app.locals.onStripeEvent(payload);
-      }
+      await handleInvoiceCreateTransaction({
+        invoiceId: event.data.object.id,
+        txStatus: "failed",
+      });
     }
 
     return res.status(200).json({ received: true });
@@ -151,4 +475,3 @@ export async function stripeWebhook(req, res) {
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 }
-

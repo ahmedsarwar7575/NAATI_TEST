@@ -6,6 +6,9 @@ import { Segment } from "./segment.model.js";
 import ExamAttempt from "./examAttempt.model.js";
 import SegmentAttempt from "./segmentAttempt.model.js";
 import ExamImage from "./examImage.model.js";
+import { Subscription } from "./subscription.model.js";
+import { Transaction } from "./transaction.model.js";
+
 
 Language.hasMany(Domain, { foreignKey: "languageId", onDelete: "CASCADE", onUpdate: "CASCADE" });
 Domain.belongsTo(Language, { foreignKey: "languageId" });
@@ -42,5 +45,13 @@ ExamImage.belongsTo(User, { foreignKey: "userId" });
 
 Segment.hasMany(ExamImage, { foreignKey: "segmentId", onDelete: "SET NULL" });
 ExamImage.belongsTo(Segment, { foreignKey: "segmentId" });
+User.hasOne(Subscription, { foreignKey: "userId", onDelete: "CASCADE" });
+Subscription.belongsTo(User, { foreignKey: "userId" });
 
-export const models = { User, Language, Domain, Dialogue, Segment, ExamAttempt, SegmentAttempt, ExamImage };
+
+User.hasMany(Transaction, { foreignKey: "userId", onDelete: "CASCADE" });
+Transaction.belongsTo(User, { foreignKey: "userId" });
+
+// optional (nice)
+Subscription.hasMany(Transaction, { foreignKey: "stripeSubscriptionId", sourceKey: "stripeSubscriptionId" });
+export const models = { User, Language, Domain, Dialogue, Segment, ExamAttempt, SegmentAttempt, ExamImage, Subscription, Transaction };
