@@ -1,3 +1,4 @@
+// stripe.controller.js (UPDATED)
 import Stripe from "stripe";
 import dotenv from "dotenv";
 import { sequelize } from "../config/db.js";
@@ -7,7 +8,9 @@ import { Transaction } from "../models/transaction.model.js";
 
 dotenv.config();
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
+  apiVersion: "2024-09-30.acacia", // optional: match CLI version
+});
 
 function priceIdFromType(type) {
   if (type === "one") return process.env.STRIPE_MONTHLY_PRICE_ID;
@@ -21,11 +24,13 @@ function unixToDate(sec) {
   return new Date(sec * 1000);
 }
 
+// ✅ FIX: current_period_end lives on the subscription object
 function getCurrentPeriodEndFromSub(sub) {
-  return unixToDate(sub?.items?.data?.[0]?.current_period_end);
+  return unixToDate(sub?.current_period_end);
 }
 
 function getPriceIdFromSub(sub) {
+  // subscription.items.data[0].price.id
   return sub?.items?.data?.[0]?.price?.id || null;
 }
 
@@ -68,12 +73,31 @@ async function upsertSubscriptionRow(
   return Subscription.create(data, { transaction: t });
 }
 
-async function resolveUserId({ stripeSub, stripeCustomerId }, t) {
-  const metaUserId = stripeSub?.metadata?.userId
+async function resolveUserIdFromAny({
+  session,
+  stripeSub,
+  stripeCustomerId,
+  t,
+}) {
+  // 1) checkout.session.metadata.userId
+  const fromSessionMeta = session?.metadata?.userId
+    ? Number(session.metadata.userId)
+    : null;
+  if (fromSessionMeta) return fromSessionMeta;
+
+  // 2) checkout.session.client_reference_id
+  const fromClientRef = session?.client_reference_id
+    ? Number(session.client_reference_id)
+    : null;
+  if (fromClientRef) return fromClientRef;
+
+  // 3) subscription.metadata.userId
+  const fromSubMeta = stripeSub?.metadata?.userId
     ? Number(stripeSub.metadata.userId)
     : null;
-  if (metaUserId) return metaUserId;
+  if (fromSubMeta) return fromSubMeta;
 
+  // 4) map via user.stripeCustomerId (if already saved)
   if (stripeCustomerId) {
     const user = await User.findOne({
       where: { stripeCustomerId },
@@ -122,7 +146,6 @@ async function handleInvoiceCreateTransaction({ invoiceId, txStatus }) {
 
   const stripeCustomerId = inv.customer;
   const stripeSubscriptionId = inv.subscription;
-
   if (!stripeSubscriptionId) return;
 
   const sub = await stripe.subscriptions.retrieve(stripeSubscriptionId, {
@@ -130,7 +153,11 @@ async function handleInvoiceCreateTransaction({ invoiceId, txStatus }) {
   });
 
   await sequelize.transaction(async (t) => {
-    const userId = await resolveUserId({ stripeSub: sub, stripeCustomerId }, t);
+    const userId = await resolveUserIdFromAny({
+      stripeSub: sub,
+      stripeCustomerId,
+      t,
+    });
     if (!userId) return;
 
     await User.update(
@@ -185,11 +212,11 @@ export async function createCheckoutSession(req, res) {
     if (!userId) return res.status(400).json({ error: "userId required" });
 
     const session = await stripe.checkout.sessions.create({
-      mode: "subscription",
+      mode: "subscription", // ✅ subscription mode
       line_items: [{ price: priceId, quantity: 1 }],
       success_url: `${process.env.APP_URL}/success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${process.env.APP_URL}/cancel`,
-      client_reference_id: String(userId),
+      client_reference_id: String(userId), // ✅ backup for mapping
       metadata: { userId: String(userId), planType: String(type) },
       subscription_data: {
         metadata: { userId: String(userId), planType: String(type) },
@@ -229,88 +256,86 @@ export async function verifyCheckoutSession(req, res) {
     let transactionCreated = false;
 
     if (paid && subscription) {
-      const userId = session.metadata?.userId
-        ? Number(session.metadata.userId)
-        : null;
-
       const stripeCustomerId =
         typeof session.customer === "string"
           ? session.customer
           : session.customer?.id;
 
       await sequelize.transaction(async (t) => {
-        if (userId && stripeCustomerId) {
-          await User.update(
-            { stripeCustomerId },
-            { where: { id: userId }, transaction: t }
-          );
-        }
+        const userId = await resolveUserIdFromAny({
+          session,
+          stripeSub: subscription,
+          stripeCustomerId,
+          t,
+        });
+        if (!userId || !stripeCustomerId) return;
+
+        await User.update(
+          { stripeCustomerId },
+          { where: { id: userId }, transaction: t }
+        );
 
         const currentPeriodEnd = getCurrentPeriodEndFromSub(subscription);
         const stripePriceId = getPriceIdFromSub(subscription);
 
-        if (userId && stripeCustomerId) {
-          await upsertSubscriptionRow(
-            {
-              userId,
-              stripeCustomerId,
-              stripeSubscriptionId: subscription.id,
-              status: subscription.status,
-              cancelAtPeriodEnd: subscription.cancel_at_period_end,
-              currentPeriodEnd,
-              stripePriceId,
-            },
-            t
-          );
+        await upsertSubscriptionRow(
+          {
+            userId,
+            stripeCustomerId,
+            stripeSubscriptionId: subscription.id,
+            status: subscription.status,
+            cancelAtPeriodEnd: subscription.cancel_at_period_end,
+            currentPeriodEnd,
+            stripePriceId,
+          },
+          t
+        );
+
+        // Try to find a paid invoice and upsert transaction
+        const fullSub = await stripe.subscriptions.retrieve(subscription.id, {
+          expand: ["latest_invoice.lines.data.price", "items.data.price"],
+        });
+
+        let inv = fullSub.latest_invoice;
+
+        if (typeof inv === "string") {
+          inv = await stripe.invoices.retrieve(inv, {
+            expand: ["lines.data.price"],
+          });
         }
 
-        if (userId && stripeCustomerId) {
-          const fullSub = await stripe.subscriptions.retrieve(subscription.id, {
-            expand: ["latest_invoice.lines.data.price", "items.data.price"],
+        if (!inv || !(inv.paid || inv.status === "paid")) {
+          const invList = await stripe.invoices.list({
+            subscription: subscription.id,
+            limit: 5,
           });
-
-          let inv = fullSub.latest_invoice;
-
-          if (typeof inv === "string") {
-            inv = await stripe.invoices.retrieve(inv, {
+          inv = invList.data.find((x) => x.paid || x.status === "paid") || null;
+          if (inv?.id) {
+            inv = await stripe.invoices.retrieve(inv.id, {
               expand: ["lines.data.price"],
             });
           }
+        }
 
-          if (!inv || !(inv.paid || inv.status === "paid")) {
-            const invList = await stripe.invoices.list({
-              subscription: subscription.id,
-              limit: 5,
-            });
-            inv =
-              invList.data.find((x) => x.paid || x.status === "paid") || null;
-            if (inv && typeof inv.id === "string") {
-              inv = await stripe.invoices.retrieve(inv.id, {
-                expand: ["lines.data.price"],
-              });
-            }
-          }
+        if (inv && (inv.paid || inv.status === "paid")) {
+          const invoicePriceId = getPriceIdFromInvoice(inv);
 
-          if (inv && (inv.paid || inv.status === "paid")) {
-            const invoicePriceId = inv?.lines?.data?.[0]?.price?.id || null;
+          await upsertTransactionRow(
+            {
+              userId,
+              stripeInvoiceId: inv.id,
+              stripeCustomerId,
+              stripeSubscriptionId: subscription.id,
+              stripePriceId: invoicePriceId || stripePriceId,
+              amount: inv.amount_paid || 0,
+              currency: inv.currency || "usd",
+              status: "paid",
+              paidAt: unixToDate(inv.status_transitions?.paid_at),
+            },
+            t
+          );
 
-            await Transaction.upsert(
-              {
-                userId,
-                stripeInvoiceId: inv.id,
-                stripeCustomerId,
-                stripeSubscriptionId: subscription.id,
-                stripePriceId: invoicePriceId || stripePriceId,
-                amount: inv.amount_paid || 0,
-                currency: inv.currency || "usd",
-                status: "paid",
-                paidAt: unixToDate(inv.status_transitions?.paid_at),
-              },
-              { transaction: t }
-            );
-
-            transactionCreated = true;
-          }
+          transactionCreated = true;
         }
       });
     }
@@ -337,97 +362,124 @@ export async function verifyCheckoutSession(req, res) {
 export async function stripeWebhook(req, res) {
   try {
     const sig = req.headers["stripe-signature"];
+    if (!sig)
+      return res.status(400).send("Webhook Error: Missing stripe-signature");
 
+    // ✅ req.body is a Buffer because of express.raw
     const event = stripe.webhooks.constructEvent(
       req.body,
       sig,
       process.env.STRIPE_WEBHOOK_SECRET
     );
 
+    // quick visibility
+    console.log("✅ Stripe webhook:", event.type);
+
+    // ---- checkout.session.completed (subscription flow)
     if (event.type === "checkout.session.completed") {
       const session = event.data.object;
 
-      const userId = session.metadata?.userId
-        ? Number(session.metadata.userId)
-        : null;
-
-      const stripeCustomerId = session.customer;
-      const stripeSubscriptionId = session.subscription;
-
-      if (userId && stripeCustomerId) {
-        await User.update({ stripeCustomerId }, { where: { id: userId } });
+      // Ignore non-subscription sessions
+      if (session.mode !== "subscription" || !session.subscription) {
+        return res.status(200).json({ received: true, ignored: true });
       }
 
-      if (userId && stripeSubscriptionId) {
-        const sub = await stripe.subscriptions.retrieve(stripeSubscriptionId, {
-          expand: ["items.data.price", "latest_invoice"],
+      const stripeCustomerId = session.customer; // string in most cases
+      const stripeSubscriptionId = session.subscription;
+
+      const sub = await stripe.subscriptions.retrieve(stripeSubscriptionId, {
+        expand: ["items.data.price", "latest_invoice"],
+      });
+
+      await sequelize.transaction(async (t) => {
+        const userId = await resolveUserIdFromAny({
+          session,
+          stripeSub: sub,
+          stripeCustomerId,
+          t,
         });
+        if (!userId) return;
 
+        if (stripeCustomerId) {
+          await User.update(
+            { stripeCustomerId },
+            { where: { id: userId }, transaction: t }
+          );
+        }
+
+        const currentPeriodEnd = getCurrentPeriodEndFromSub(sub);
+        const stripePriceId = getPriceIdFromSub(sub);
+
+        await upsertSubscriptionRow(
+          {
+            userId,
+            stripeCustomerId,
+            stripeSubscriptionId: sub.id,
+            status: sub.status,
+            cancelAtPeriodEnd: sub.cancel_at_period_end,
+            currentPeriodEnd,
+            stripePriceId,
+          },
+          t
+        );
+      });
+
+      // Optional: create transaction if invoice already paid
+      const latestInvoiceObj =
+        typeof sub.latest_invoice === "string"
+          ? await stripe.invoices.retrieve(sub.latest_invoice, {
+              expand: ["lines.data.price"],
+            })
+          : sub.latest_invoice;
+
+      if (
+        latestInvoiceObj?.id &&
+        (latestInvoiceObj.paid || latestInvoiceObj.status === "paid")
+      ) {
         await sequelize.transaction(async (t) => {
-          const currentPeriodEnd = getCurrentPeriodEndFromSub(sub);
-          const stripePriceId = getPriceIdFromSub(sub);
+          const userId = await resolveUserIdFromAny({
+            session,
+            stripeSub: sub,
+            stripeCustomerId,
+            t,
+          });
+          if (!userId) return;
 
-          await upsertSubscriptionRow(
+          await upsertTransactionRow(
             {
               userId,
+              stripeInvoiceId: latestInvoiceObj.id,
               stripeCustomerId,
               stripeSubscriptionId: sub.id,
-              status: sub.status,
-              cancelAtPeriodEnd: sub.cancel_at_period_end,
-              currentPeriodEnd,
-              stripePriceId,
+              stripePriceId:
+                getPriceIdFromInvoice(latestInvoiceObj) ||
+                getPriceIdFromSub(sub),
+              amount: latestInvoiceObj.amount_paid || 0,
+              currency: latestInvoiceObj.currency || "usd",
+              status: "paid",
+              paidAt: unixToDate(latestInvoiceObj.status_transitions?.paid_at),
             },
             t
           );
         });
-
-        const latestInvoiceObj =
-          typeof sub.latest_invoice === "string"
-            ? await stripe.invoices.retrieve(sub.latest_invoice, {
-                expand: ["lines.data.price"],
-              })
-            : sub.latest_invoice;
-
-        if (
-          latestInvoiceObj?.id &&
-          (latestInvoiceObj?.paid || latestInvoiceObj?.status === "paid")
-        ) {
-          await sequelize.transaction(async (t) => {
-            await upsertTransactionRow(
-              {
-                userId,
-                stripeInvoiceId: latestInvoiceObj.id,
-                stripeCustomerId,
-                stripeSubscriptionId: sub.id,
-                stripePriceId:
-                  getPriceIdFromInvoice(latestInvoiceObj) || stripePriceId,
-                amount: latestInvoiceObj.amount_paid || 0,
-                currency: latestInvoiceObj.currency || "usd",
-                status: "paid",
-                paidAt: unixToDate(
-                  latestInvoiceObj.status_transitions?.paid_at
-                ),
-              },
-              t
-            );
-          });
-        }
       }
     }
 
+    // ---- subscription lifecycle updates
     if (
+      event.type === "customer.subscription.created" ||
       event.type === "customer.subscription.updated" ||
-      event.type === "customer.subscription.deleted" ||
-      event.type === "customer.subscription.created"
+      event.type === "customer.subscription.deleted"
     ) {
       const sub = event.data.object;
       const stripeCustomerId = sub.customer;
 
       await sequelize.transaction(async (t) => {
-        const userId = await resolveUserId(
-          { stripeSub: sub, stripeCustomerId },
-          t
-        );
+        const userId = await resolveUserIdFromAny({
+          stripeSub: sub,
+          stripeCustomerId,
+          t,
+        });
         if (!userId) return;
 
         await User.update(
@@ -453,6 +505,7 @@ export async function stripeWebhook(req, res) {
       });
     }
 
+    // ---- invoices -> transactions
     if (
       event.type === "invoice.paid" ||
       event.type === "invoice.payment_succeeded"
@@ -472,6 +525,7 @@ export async function stripeWebhook(req, res) {
 
     return res.status(200).json({ received: true });
   } catch (err) {
+    console.error("Stripe webhook error:", err.message);
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 }
