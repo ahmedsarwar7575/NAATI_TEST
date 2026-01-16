@@ -6,6 +6,7 @@ import { stripeWebhook } from "./controllers/stripe.controller.js";
 export const app = express();
 
 app.use(cors());
+app.options("*", cors());
 app.post(
   "/api/v1/stripe/webhook",
   express.raw({ type: "application/json" }),
