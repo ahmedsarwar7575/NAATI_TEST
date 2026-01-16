@@ -214,8 +214,8 @@ export async function createCheckoutSession(req, res) {
     const session = await stripe.checkout.sessions.create({
       mode: "subscription", // ✅ subscription mode
       line_items: [{ price: priceId, quantity: 1 }],
-      success_url: `${process.env.APP_URL}/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${process.env.APP_URL}/cancel`,
+      success_url: `https://naati-project.vercel.app/success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `https://naati-project.vercel.app/failure`,
       client_reference_id: String(userId), // ✅ backup for mapping
       metadata: { userId: String(userId), planType: String(type) },
       subscription_data: {
