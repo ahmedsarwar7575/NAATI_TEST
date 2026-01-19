@@ -8,8 +8,16 @@
 
   export const app = express();
 
-  app.use(cors());
-  app.options("*", cors());
+  app.use(
+    cors({
+      origin: true,
+      credentials: true,
+      methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+      allowedHeaders: ["Content-Type", "Authorization", "Stripe-Signature"],
+    })
+  );
+  
+  app.options("*", cors({ origin: true, credentials: true }));
 
 
   app.post(
