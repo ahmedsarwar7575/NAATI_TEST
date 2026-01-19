@@ -10,10 +10,10 @@ const upload = multer({
     storage: multer.memoryStorage()
   });
 export const adminContentRouter = Router();
-
+import getDashboardStats from "../controllers/dashboard.controller.js";
 adminContentRouter.use(requireAuth, requireAdmin);
 
-adminContentRouter.get("/dashboard", getDashboardCounts);
+adminContentRouter.get("/dashboard", getDashboardStats);
 
 adminContentRouter.post("/languages", createLanguage);
 adminContentRouter.get("/languages", listLanguages);
