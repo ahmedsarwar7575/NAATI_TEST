@@ -16,23 +16,38 @@ function safeUser(user) {
     isVerified: user.isVerified,
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
-    role: user.role
+    role: user.role,
   };
 }
 
 export async function register(req, res, next) {
   try {
-    const { name, email, phone, password, preferredLanguage, naatiCclExamDate } = req.body;
+    const {
+      name,
+      email,
+      phone,
+      password,
+      preferredLanguage,
+      naatiCclExamDate,
+    } = req.body;
 
     if (!name || !email || !phone || !password || !preferredLanguage) {
-      return res.status(400).json({ success: false, message: "Missing required fields" });
+      return res
+        .status(400)
+        .json({ success: false, message: "Missing required fields" });
     }
 
     const exists = await models.User.findOne({ where: { email } });
-    if (exists) return res.status(409).json({ success: false, message: "Email already in use" });
+    if (exists)
+      return res
+        .status(409)
+        .json({ success: false, message: "Email already in use" });
 
     const existsPhone = await models.User.findOne({ where: { phone } });
-    if (existsPhone) return res.status(409).json({ success: false, message: "Phone already in use" });
+    if (existsPhone)
+      return res
+        .status(409)
+        .json({ success: false, message: "Phone already in use" });
 
     const passwordHash = await hashPassword(password);
 
@@ -46,13 +61,40 @@ export async function register(req, res, next) {
       naatiCclExamDate: naatiCclExamDate || null,
       otpCode: otp,
       otpExpiresAt: otpExpiryDate(),
-      isVerified: false
+      isVerified: false,
     });
-    sendEmailFunc(email, "Verify your account", `<p>OTP: ${otp}</p>`);
+    const html = `
+<div style="font-family:Arial,Helvetica,sans-serif; background:#f6f8fb; padding:24px;">
+  <div style="max-width:520px; margin:0 auto; background:#ffffff; border-radius:14px; padding:24px; border:1px solid #eef1f6;">
+    <h2 style="margin:0 0 10px; font-size:18px; color:#111827;">Verify your account</h2>
+    <p style="margin:0 0 18px; font-size:14px; color:#374151; line-height:1.6;">
+      Use the OTP below to verify your account. This code expires soon.
+    </p>
+
+    <div style="text-align:center; margin:18px 0 6px;">
+      <div style="display:inline-block; padding:12px 18px; border-radius:12px; background:#111827; color:#ffffff; font-size:22px; letter-spacing:6px; font-weight:700;">
+        ${otp}
+      </div>
+    </div>
+
+    <p style="margin:14px 0 0; font-size:12px; color:#6b7280;">
+      If you didn’t request this, you can ignore this email.
+    </p>
+
+    <p style="margin:16px 0 0; font-size:11px; color:#9ca3af;">
+      © ${new Date().getFullYear()} PrepSmart
+    </p>
+  </div>
+</div>
+`;
+
+    sendEmailFunc(email, "Verify your account", html);
     const data = { user: safeUser(user) };
     if (env.appEnv === "development") data.otp = otp;
 
-    return res.status(201).json({ success: true, message: "Registered. Verify OTP.", data });
+    return res
+      .status(201)
+      .json({ success: true, message: "Registered. Verify OTP.", data });
   } catch (err) {
     return next(err);
   }
@@ -61,13 +103,22 @@ export async function register(req, res, next) {
 export async function verifyOtp(req, res, next) {
   try {
     const { email, otp } = req.body;
-    if (!email || !otp) return res.status(400).json({ success: false, message: "Missing email or otp" });
+    if (!email || !otp)
+      return res
+        .status(400)
+        .json({ success: false, message: "Missing email or otp" });
 
     const user = await models.User.findOne({ where: { email } });
-    if (!user) return res.status(404).json({ success: false, message: "User not found" });
+    if (!user)
+      return res
+        .status(404)
+        .json({ success: false, message: "User not found" });
 
     const ok = isOtpValid(user.otpCode, user.otpExpiresAt, otp);
-    if (!ok) return res.status(400).json({ success: false, message: "Invalid or expired OTP" });
+    if (!ok)
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid or expired OTP" });
 
     user.isVerified = true;
     user.otpCode = null;
@@ -76,7 +127,11 @@ export async function verifyOtp(req, res, next) {
 
     const token = signJwt({ role: "user", userId: user.id });
 
-    return res.json({ success: true, message: "Verified", data: { token, user: safeUser(user) } });
+    return res.json({
+      success: true,
+      message: "Verified",
+      data: { token, user: safeUser(user) },
+    });
   } catch (err) {
     return next(err);
   }
@@ -85,18 +140,50 @@ export async function verifyOtp(req, res, next) {
 export async function resendOtp(req, res, next) {
   try {
     const { email } = req.body;
-    if (!email) return res.status(400).json({ success: false, message: "Missing email" });
+    if (!email)
+      return res.status(400).json({ success: false, message: "Missing email" });
 
     const user = await models.User.findOne({ where: { email } });
-    if (!user) return res.status(404).json({ success: false, message: "User not found" });
+    if (!user)
+      return res
+        .status(404)
+        .json({ success: false, message: "User not found" });
 
-    if (user.isVerified) return res.status(400).json({ success: false, message: "Already verified" });
+    if (user.isVerified)
+      return res
+        .status(400)
+        .json({ success: false, message: "Already verified" });
 
     const otp = generateOtp();
     user.otpCode = otp;
     user.otpExpiresAt = otpExpiryDate();
     await user.save();
-    sendEmailFunc(email, "Verify your account", `<p>OTP: ${otp}</p>`);
+    const html = `
+    <div style="font-family:Arial,Helvetica,sans-serif; background:#f6f8fb; padding:24px;">
+      <div style="max-width:520px; margin:0 auto; background:#ffffff; border-radius:14px; padding:24px; border:1px solid #eef1f6;">
+        <h2 style="margin:0 0 10px; font-size:18px; color:#111827;">Verify your account</h2>
+        <p style="margin:0 0 18px; font-size:14px; color:#374151; line-height:1.6;">
+          Use the OTP below to verify your account. This code expires soon.
+        </p>
+    
+        <div style="text-align:center; margin:18px 0 6px;">
+          <div style="display:inline-block; padding:12px 18px; border-radius:12px; background:#111827; color:#ffffff; font-size:22px; letter-spacing:6px; font-weight:700;">
+            ${otp}
+          </div>
+        </div>
+    
+        <p style="margin:14px 0 0; font-size:12px; color:#6b7280;">
+          If you didn’t request this, you can ignore this email.
+        </p>
+    
+        <p style="margin:16px 0 0; font-size:11px; color:#9ca3af;">
+          © ${new Date().getFullYear()} PrepSmart
+        </p>
+      </div>
+    </div>
+    `;
+
+    sendEmailFunc(email, "Verify your account", html);
     const data = {};
     if (env.appEnv === "development") data.otp = otp;
 
@@ -110,26 +197,44 @@ export async function login(req, res, next) {
   try {
     const { emailOrPhone, password } = req.body;
     if (!emailOrPhone || !password) {
-      return res.status(400).json({ success: false, message: "Missing credentials" });
+      return res
+        .status(400)
+        .json({ success: false, message: "Missing credentials" });
     }
 
     const user = await models.User.findOne({
-      where: emailOrPhone.includes("@") ? { email: emailOrPhone } : { phone: emailOrPhone }
+      where: emailOrPhone.includes("@")
+        ? { email: emailOrPhone }
+        : { phone: emailOrPhone },
     });
-    
-    if (!user) return res.status(401).json({ success: false, message: "Invalid credentials" });
-    if (!user.isVerified) return res.status(200).json({ success: false, message: "Verify OTP first", user: safeUser(user)  });
+
+    if (!user)
+      return res
+        .status(401)
+        .json({ success: false, message: "Invalid credentials" });
+    if (!user.isVerified)
+      return res.status(200).json({
+        success: false,
+        message: "Verify OTP first",
+        user: safeUser(user),
+      });
 
     const ok = await verifyPassword(password, user.passwordHash);
-    if (!ok) return res.status(401).json({ success: false, message: "Invalid credentials" });
+    if (!ok)
+      return res
+        .status(401)
+        .json({ success: false, message: "Invalid credentials" });
     let token;
-    if (user.role === "admin"){
-     token = signJwt({ role: "admin", userId: user.id });
+    if (user.role === "admin") {
+      token = signJwt({ role: "admin", userId: user.id });
+    } else {
+      token = signJwt({ role: "user", userId: user.id });
     }
-    else{
-     token = signJwt({ role: "user", userId: user.id });
-    }
-    return res.json({ success: true, message: "Logged in", data: { token, user: safeUser(user) } });
+    return res.json({
+      success: true,
+      message: "Logged in",
+      data: { token, user: safeUser(user) },
+    });
   } catch (err) {
     return next(err);
   }
@@ -138,13 +243,42 @@ export async function login(req, res, next) {
 export async function forgotPassword(req, res, next) {
   try {
     const { email } = req.body;
-    if (!email) return res.status(400).json({ success: false, message: "Missing email" });
+    if (!email)
+      return res.status(400).json({ success: false, message: "Missing email" });
 
     const user = await models.User.findOne({ where: { email } });
-    if (!user) return res.status(404).json({ success: false, message: "User not found" });
+    if (!user)
+      return res
+        .status(404)
+        .json({ success: false, message: "User not found" });
 
     const otp = generateOtp();
-    sendEmailFunc(email, "Verify your account", `<p>OTP: ${otp}</p>`);
+    const html = `
+    <div style="font-family:Arial,Helvetica,sans-serif; background:#f6f8fb; padding:24px;">
+      <div style="max-width:520px; margin:0 auto; background:#ffffff; border-radius:14px; padding:24px; border:1px solid #eef1f6;">
+        <h2 style="margin:0 0 10px; font-size:18px; color:#111827;">Verify your account</h2>
+        <p style="margin:0 0 18px; font-size:14px; color:#374151; line-height:1.6;">
+          Use the OTP below to reset your password. This code expires soon.
+        </p>
+    
+        <div style="text-align:center; margin:18px 0 6px;">
+          <div style="display:inline-block; padding:12px 18px; border-radius:12px; background:#111827; color:#ffffff; font-size:22px; letter-spacing:6px; font-weight:700;">
+            ${otp}
+          </div>
+        </div>
+    
+        <p style="margin:14px 0 0; font-size:12px; color:#6b7280;">
+          If you didn’t request this, you can ignore this email.
+        </p>
+    
+        <p style="margin:16px 0 0; font-size:11px; color:#9ca3af;">
+          © ${new Date().getFullYear()} PrepSmart
+        </p>
+      </div>
+    </div>
+    `;
+
+    sendEmailFunc(email, "Verify your account", html);
     user.resetOtpCode = otp;
     user.resetOtpExpiresAt = otpExpiryDate();
     await user.save();
@@ -162,14 +296,22 @@ export async function resetPassword(req, res, next) {
   try {
     const { email, otp, newPassword } = req.body;
     if (!email || !otp || !newPassword) {
-      return res.status(400).json({ success: false, message: "Missing fields" });
+      return res
+        .status(400)
+        .json({ success: false, message: "Missing fields" });
     }
 
     const user = await models.User.findOne({ where: { email } });
-    if (!user) return res.status(404).json({ success: false, message: "User not found" });
+    if (!user)
+      return res
+        .status(404)
+        .json({ success: false, message: "User not found" });
 
     const ok = isOtpValid(user.resetOtpCode, user.resetOtpExpiresAt, otp);
-    if (!ok) return res.status(400).json({ success: false, message: "Invalid or expired OTP" });
+    if (!ok)
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid or expired OTP" });
 
     user.passwordHash = await hashPassword(newPassword);
     user.resetOtpCode = null;
@@ -184,10 +326,14 @@ export async function resetPassword(req, res, next) {
 
 export async function me(req, res, next) {
   try {
-    if (!req.auth || !req.auth.userId) return res.status(401).json({ success: false, message: "Unauthorized" });
+    if (!req.auth || !req.auth.userId)
+      return res.status(401).json({ success: false, message: "Unauthorized" });
 
     const user = await models.User.findByPk(req.auth.userId);
-    if (!user) return res.status(404).json({ success: false, message: "User not found" });
+    if (!user)
+      return res
+        .status(404)
+        .json({ success: false, message: "User not found" });
 
     return res.json({ success: true, data: { user: safeUser(user) } });
   } catch (err) {
