@@ -34,7 +34,6 @@ export async function listDialogues(req, res, next) {
 
     const dialogues = await models.Dialogue.findAll({
       where,
-      order: [["id", "DESC"]],
       include: [{ model: models.Domain }, { model: models.Language }]
     });
 
