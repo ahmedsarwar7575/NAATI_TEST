@@ -49,7 +49,7 @@ export async function createUser(req, res, next) {
 
 export async function listUsers(req, res, next) {
   try {
-    const users = await models.User.findAll({ order: [["id", "DESC"]] });
+    const users = await models.User.findAll({ order: [["id", "DESC"]], where: { role: "user" } });
     return res.json({ success: true, data: { users: users.map(safeUser) } });
   } catch (err) {
     return next(err);

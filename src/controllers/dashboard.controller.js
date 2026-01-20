@@ -148,7 +148,7 @@ export default async function getAdminSummary(req, res) {
         ? { from: range.fromDate.toISOString(), to: range.toDate.toISOString() }
         : null,
       totals: {
-        users: totalUsers,
+        users: totalUsers - 1,
         dialogues: totalDialogues,
         languages: totalLanguages,
         activeSubscriptions,
