@@ -1,8 +1,8 @@
 import { DataTypes } from "sequelize";
 import { sequelize } from "../config/db.js";
 
-const SegmentAttempt = sequelize.define(
-  "SegmentAttempt",
+const MockTestResult = sequelize.define(
+  "MockTestResult",
   {
     id: {
       type: DataTypes.BIGINT.UNSIGNED,
@@ -11,22 +11,45 @@ const SegmentAttempt = sequelize.define(
       allowNull: false,
     },
 
-    examAttemptId: {
+    mockTestSessionId: {
       type: DataTypes.BIGINT.UNSIGNED,
       allowNull: false,
-      field: "exam_attempt_id",
+      field: "mock_test_session_id",
     },
 
+    mockTestId: {
+      type: DataTypes.BIGINT.UNSIGNED,
+      allowNull: false,
+      field: "mock_test_id",
+    },
     userId: {
       type: DataTypes.BIGINT.UNSIGNED,
       allowNull: false,
       field: "user_id",
     },
-
     segmentId: {
       type: DataTypes.BIGINT.UNSIGNED,
       allowNull: false,
       field: "segment_id",
+    },
+
+    status: {
+      type: DataTypes.ENUM("pending", "completed"),
+      allowNull: false,
+      defaultValue: "pending",
+    },
+
+    maxMarks: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: false,
+      defaultValue: 0,
+      field: "max_marks",
+    },
+    obtainedMarks: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: false,
+      defaultValue: 0,
+      field: "obtained_marks",
     },
 
     audioUrl: { type: DataTypes.TEXT, allowNull: true, field: "audio_url" },
@@ -35,7 +58,6 @@ const SegmentAttempt = sequelize.define(
       allowNull: true,
       field: "user_transcription",
     },
-
     aiScores: { type: DataTypes.JSON, allowNull: true, field: "ai_scores" },
 
     accuracyScore: {
@@ -125,23 +147,21 @@ const SegmentAttempt = sequelize.define(
 
     repeatCount: {
       type: DataTypes.INTEGER,
-      allowNull: false,
+      allowNull: true,
       defaultValue: 1,
       field: "repeat_count",
     },
   },
   {
-    tableName: "segment_attempts",
+    tableName: "mockTest_result",
     underscored: true,
     timestamps: true,
     indexes: [
-      {
-        name: "uq_segment_attempts_attempt_segment_repeat",
-        unique: true,
-        fields: ["exam_attempt_id", "segment_id", "repeat_count"], // ✅ real DB columns
-      },
+      { unique: true, fields: ["mock_test_session_id", "segment_id"] },
+      { fields: ["mock_test_id", "user_id"] },
+      { fields: ["mock_test_session_id", "status"] },
     ],
   },
 );
 
-export default SegmentAttempt;
+export default MockTestResult;

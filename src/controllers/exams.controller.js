@@ -1,6 +1,9 @@
 import { models } from "../models/index.js";
 import OpenAI from "openai";
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
 
 const { ExamAttempt, Dialogue, Segment, SegmentAttempt } = models;
 
@@ -205,7 +208,7 @@ export const computeResult = async (req, res, next) => {
       languageQualityScore: avgOfField(segments, "languageQualityScore"),
       fluencyPronunciationScore: avgOfField(
         segments,
-        "fluencyPronunciationScore"
+        "fluencyPronunciationScore",
       ),
       deliveryCoherenceScore: avgOfField(segments, "deliveryCoherenceScore"),
       culturalControlScore: avgOfField(segments, "culturalControlScore"),
@@ -229,7 +232,7 @@ export const computeResult = async (req, res, next) => {
 
     const prompt = [
       `Averages (0–?? scale depending on your rubric): ${JSON.stringify(
-        averages
+        averages,
       )}`,
       `Per-segment feedback notes:`,
       notes,
@@ -250,7 +253,7 @@ export const computeResult = async (req, res, next) => {
         averages,
         overallFeedback,
       },
-      segments
+      segments,
     });
   } catch (e) {
     next(e);

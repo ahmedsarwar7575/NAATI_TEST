@@ -1,20 +1,19 @@
 import { DataTypes } from "sequelize";
 import { sequelize } from "../config/db.js";
 
-const SegmentAttempt = sequelize.define(
-  "SegmentAttempt",
+const MockTestAttempts = sequelize.define(
+  "MockTestAttempts",
   {
     id: {
       type: DataTypes.BIGINT.UNSIGNED,
-      primaryKey: true,
       autoIncrement: true,
-      allowNull: false,
+      primaryKey: true,
     },
 
-    examAttemptId: {
+    mockTestSessionId: {
       type: DataTypes.BIGINT.UNSIGNED,
       allowNull: false,
-      field: "exam_attempt_id",
+      field: "mock_test_session_id",
     },
 
     userId: {
@@ -22,11 +21,27 @@ const SegmentAttempt = sequelize.define(
       allowNull: false,
       field: "user_id",
     },
+    mockTestId: {
+      type: DataTypes.BIGINT.UNSIGNED,
+      allowNull: false,
+      field: "mock_test_id",
+    },
 
+    dialogueId: {
+      type: DataTypes.BIGINT.UNSIGNED,
+      allowNull: false,
+      field: "dialogue_id",
+    },
     segmentId: {
       type: DataTypes.BIGINT.UNSIGNED,
       allowNull: false,
       field: "segment_id",
+    },
+
+    status: {
+      type: DataTypes.ENUM("submitted", "scored"),
+      allowNull: false,
+      defaultValue: "submitted",
     },
 
     audioUrl: { type: DataTypes.TEXT, allowNull: true, field: "audio_url" },
@@ -131,17 +146,14 @@ const SegmentAttempt = sequelize.define(
     },
   },
   {
-    tableName: "segment_attempts",
+    tableName: "mocktest_attempts",
     underscored: true,
     timestamps: true,
     indexes: [
-      {
-        name: "uq_segment_attempts_attempt_segment_repeat",
-        unique: true,
-        fields: ["exam_attempt_id", "segment_id", "repeat_count"], // ✅ real DB columns
-      },
+      { fields: ["mock_test_session_id", "segment_id"] },
+      { fields: ["user_id", "mock_test_id"] },
     ],
   },
 );
 
-export default SegmentAttempt;
+export default MockTestAttempts;

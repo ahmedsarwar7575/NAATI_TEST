@@ -11,7 +11,7 @@ export const User = sequelize.define(
     },
 
     name: { type: DataTypes.STRING(120), allowNull: false },
-    email: { type: DataTypes.STRING(190), allowNull: false, unique: true },
+    email: { type: DataTypes.STRING(255), allowNull: false, unique: true },
     phone: { type: DataTypes.STRING(40), allowNull: false, unique: true },
 
     passwordHash: { type: DataTypes.STRING(255), allowNull: false },
@@ -27,7 +27,7 @@ export const User = sequelize.define(
     stripeCustomerId: {
       type: DataTypes.STRING(64),
       allowNull: true,
-      unique: true,
+      // unique: true,
       field: "stripe_customer_id",
     },
     otpCode: { type: DataTypes.STRING(10), allowNull: true },
@@ -45,5 +45,5 @@ export const User = sequelize.define(
     tableName: "users",
     timestamps: true,
     underscored: true,
-  }
+  },
 );

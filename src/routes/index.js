@@ -10,7 +10,8 @@ import stripeRouter from "./stripe.routes.js";
 import TransactionRoute from "./transaction.routes.js";
 import subscriptionStatus from "./subscriptionStatus.routes.js";
 import contatUsRoutes from "./contactMessages.routes.js";
-
+import mockTestRoutes from "./mockTest.routes.js";
+import mockTestCompleteRoutes from "./mockTestFlow.routes.js";
 apiRouter.get("/health", (req, res) => res.json({ success: true }));
 
 apiRouter.use("/auth", authRouter);
@@ -23,3 +24,5 @@ apiRouter.use("/stripe", stripeRouter);
 apiRouter.use("/transaction", TransactionRoute);
 apiRouter.use("/subscriptions", subscriptionStatus);
 apiRouter.use("/contact", contatUsRoutes);
+apiRouter.use("/mockTest", mockTestRoutes);
+apiRouter.use("/mockTestAttempt", mockTestCompleteRoutes);
