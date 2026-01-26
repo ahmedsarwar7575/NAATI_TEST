@@ -12,6 +12,7 @@ import subscriptionStatus from "./subscriptionStatus.routes.js";
 import contatUsRoutes from "./contactMessages.routes.js";
 import mockTestRoutes from "./mockTest.routes.js";
 import mockTestCompleteRoutes from "./mockTestFlow.routes.js";
+import MockTestFinalResult from "./mockTestFinalResult.routes.js";
 apiRouter.get("/health", (req, res) => res.json({ success: true }));
 
 apiRouter.use("/auth", authRouter);
@@ -26,3 +27,4 @@ apiRouter.use("/subscriptions", subscriptionStatus);
 apiRouter.use("/contact", contatUsRoutes);
 apiRouter.use("/mockTest", mockTestRoutes);
 apiRouter.use("/mockTestAttempt", mockTestCompleteRoutes);
+apiRouter.use("/", MockTestFinalResult);

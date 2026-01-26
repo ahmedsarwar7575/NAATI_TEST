@@ -1,8 +1,7 @@
 import MockTestFinalResult from "../models/mockTestFinalResult.model.js";
-import MockTestResult from "../models/mockTestResult.model.js";
+import MockTestResult from "../models/mockTestResult.js";
 import MockTestSession from "../models/mockTestSession.model.js";
 import MockTest from "../models/mocketTest.model.js";
-
 const toInt = (v) => {
   if (v === undefined || v === null || v === "") return undefined;
   const n = Number(v);
