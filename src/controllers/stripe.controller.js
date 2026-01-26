@@ -1,4 +1,3 @@
-// stripe.controller.js (UPDATED)
 import Stripe from "stripe";
 import dotenv from "dotenv";
 import { sequelize } from "../config/db.js";
@@ -9,8 +8,14 @@ import { Transaction } from "../models/transaction.model.js";
 dotenv.config();
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
-  apiVersion: "2024-09-30.acacia", // optional: match CLI version
+  apiVersion: "2024-09-30.acacia",
 });
+
+function toInt(v) {
+  if (v === undefined || v === null || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
 
 function priceIdFromType(type) {
   if (type === "one") return process.env.STRIPE_MONTHLY_PRICE_ID;
@@ -24,18 +29,30 @@ function unixToDate(sec) {
   return new Date(sec * 1000);
 }
 
-// ✅ FIX: current_period_end lives on the subscription object
 function getCurrentPeriodEndFromSub(sub) {
   return unixToDate(sub?.current_period_end);
 }
 
 function getPriceIdFromSub(sub) {
-  // subscription.items.data[0].price.id
   return sub?.items?.data?.[0]?.price?.id || null;
 }
 
 function getPriceIdFromInvoice(inv) {
   return inv?.lines?.data?.[0]?.price?.id || null;
+}
+
+function getLanguageIdFromAny({ session, stripeSub }) {
+  const fromSession = toInt(
+    session?.metadata?.languageId ?? session?.metadata?.language_id
+  );
+  if (fromSession) return fromSession;
+
+  const fromSub = toInt(
+    stripeSub?.metadata?.languageId ?? stripeSub?.metadata?.language_id
+  );
+  if (fromSub) return fromSub;
+
+  return null;
 }
 
 async function upsertSubscriptionRow(
@@ -47,6 +64,7 @@ async function upsertSubscriptionRow(
     cancelAtPeriodEnd,
     currentPeriodEnd,
     stripePriceId,
+    languageId,
   },
   t
 ) {
@@ -65,6 +83,10 @@ async function upsertSubscriptionRow(
     currentPeriodEnd,
   };
 
+  if (languageId !== null && languageId !== undefined) {
+    data.languageId = languageId;
+  }
+
   if (existing) {
     await existing.update(data, { transaction: t });
     return existing;
@@ -79,25 +101,21 @@ async function resolveUserIdFromAny({
   stripeCustomerId,
   t,
 }) {
-  // 1) checkout.session.metadata.userId
   const fromSessionMeta = session?.metadata?.userId
     ? Number(session.metadata.userId)
     : null;
   if (fromSessionMeta) return fromSessionMeta;
 
-  // 2) checkout.session.client_reference_id
   const fromClientRef = session?.client_reference_id
     ? Number(session.client_reference_id)
     : null;
   if (fromClientRef) return fromClientRef;
 
-  // 3) subscription.metadata.userId
   const fromSubMeta = stripeSub?.metadata?.userId
     ? Number(stripeSub.metadata.userId)
     : null;
   if (fromSubMeta) return fromSubMeta;
 
-  // 4) map via user.stripeCustomerId (if already saved)
   if (stripeCustomerId) {
     const user = await User.findOne({
       where: { stripeCustomerId },
@@ -168,6 +186,7 @@ async function handleInvoiceCreateTransaction({ invoiceId, txStatus }) {
     const currentPeriodEnd = getCurrentPeriodEndFromSub(sub);
     const stripePriceIdFromSub = getPriceIdFromSub(sub);
     const stripePriceIdFromInv = getPriceIdFromInvoice(inv);
+    const languageId = getLanguageIdFromAny({ stripeSub: sub });
 
     await upsertSubscriptionRow(
       {
@@ -178,6 +197,7 @@ async function handleInvoiceCreateTransaction({ invoiceId, txStatus }) {
         cancelAtPeriodEnd: sub.cancel_at_period_end,
         currentPeriodEnd,
         stripePriceId: stripePriceIdFromSub || stripePriceIdFromInv,
+        languageId,
       },
       t
     );
@@ -205,21 +225,31 @@ async function handleInvoiceCreateTransaction({ invoiceId, txStatus }) {
 
 export async function createCheckoutSession(req, res) {
   try {
-    const { type, userId, customerId } = req.body;
+    const { type, userId, customerId, languageId } = req.body;
 
     const priceId = priceIdFromType(type);
     if (!priceId) return res.status(400).json({ error: "Invalid type" });
     if (!userId) return res.status(400).json({ error: "userId required" });
 
+    const langId = toInt(languageId);
+
     const session = await stripe.checkout.sessions.create({
-      mode: "subscription", // ✅ subscription mode
+      mode: "subscription",
       line_items: [{ price: priceId, quantity: 1 }],
       success_url: `https://naati.prepsmart.au/success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `https://naati.prepsmart.au/failure`,
-      client_reference_id: String(userId), // ✅ backup for mapping
-      metadata: { userId: String(userId), planType: String(type) },
+      client_reference_id: String(userId),
+      metadata: {
+        userId: String(userId),
+        planType: String(type),
+        ...(langId ? { languageId: String(langId) } : {}),
+      },
       subscription_data: {
-        metadata: { userId: String(userId), planType: String(type) },
+        metadata: {
+          userId: String(userId),
+          planType: String(type),
+          ...(langId ? { languageId: String(langId) } : {}),
+        },
       },
       customer: customerId || undefined,
     });
@@ -277,6 +307,10 @@ export async function verifyCheckoutSession(req, res) {
 
         const currentPeriodEnd = getCurrentPeriodEndFromSub(subscription);
         const stripePriceId = getPriceIdFromSub(subscription);
+        const languageId = getLanguageIdFromAny({
+          session,
+          stripeSub: subscription,
+        });
 
         await upsertSubscriptionRow(
           {
@@ -287,11 +321,11 @@ export async function verifyCheckoutSession(req, res) {
             cancelAtPeriodEnd: subscription.cancel_at_period_end,
             currentPeriodEnd,
             stripePriceId,
+            languageId,
           },
           t
         );
 
-        // Try to find a paid invoice and upsert transaction
         const fullSub = await stripe.subscriptions.retrieve(subscription.id, {
           expand: ["latest_invoice.lines.data.price", "items.data.price"],
         });
@@ -365,26 +399,20 @@ export async function stripeWebhook(req, res) {
     if (!sig)
       return res.status(400).send("Webhook Error: Missing stripe-signature");
 
-    // ✅ req.body is a Buffer because of express.raw
     const event = stripe.webhooks.constructEvent(
       req.body,
       sig,
       process.env.STRIPE_WEBHOOK_SECRET
     );
 
-    // quick visibility
-    console.log("✅ Stripe webhook:", event.type);
-
-    // ---- checkout.session.completed (subscription flow)
     if (event.type === "checkout.session.completed") {
       const session = event.data.object;
 
-      // Ignore non-subscription sessions
       if (session.mode !== "subscription" || !session.subscription) {
         return res.status(200).json({ received: true, ignored: true });
       }
 
-      const stripeCustomerId = session.customer; // string in most cases
+      const stripeCustomerId = session.customer;
       const stripeSubscriptionId = session.subscription;
 
       const sub = await stripe.subscriptions.retrieve(stripeSubscriptionId, {
@@ -409,6 +437,7 @@ export async function stripeWebhook(req, res) {
 
         const currentPeriodEnd = getCurrentPeriodEndFromSub(sub);
         const stripePriceId = getPriceIdFromSub(sub);
+        const languageId = getLanguageIdFromAny({ session, stripeSub: sub });
 
         await upsertSubscriptionRow(
           {
@@ -419,12 +448,12 @@ export async function stripeWebhook(req, res) {
             cancelAtPeriodEnd: sub.cancel_at_period_end,
             currentPeriodEnd,
             stripePriceId,
+            languageId,
           },
           t
         );
       });
 
-      // Optional: create transaction if invoice already paid
       const latestInvoiceObj =
         typeof sub.latest_invoice === "string"
           ? await stripe.invoices.retrieve(sub.latest_invoice, {
@@ -465,7 +494,6 @@ export async function stripeWebhook(req, res) {
       }
     }
 
-    // ---- subscription lifecycle updates
     if (
       event.type === "customer.subscription.created" ||
       event.type === "customer.subscription.updated" ||
@@ -489,6 +517,7 @@ export async function stripeWebhook(req, res) {
 
         const currentPeriodEnd = getCurrentPeriodEndFromSub(sub);
         const stripePriceId = getPriceIdFromSub(sub);
+        const languageId = getLanguageIdFromAny({ stripeSub: sub });
 
         await upsertSubscriptionRow(
           {
@@ -499,13 +528,13 @@ export async function stripeWebhook(req, res) {
             cancelAtPeriodEnd: sub.cancel_at_period_end,
             currentPeriodEnd,
             stripePriceId,
+            languageId,
           },
           t
         );
       });
     }
 
-    // ---- invoices -> transactions
     if (
       event.type === "invoice.paid" ||
       event.type === "invoice.payment_succeeded"
@@ -525,7 +554,6 @@ export async function stripeWebhook(req, res) {
 
     return res.status(200).json({ received: true });
   } catch (err) {
-    console.error("Stripe webhook error:", err.message);
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 }

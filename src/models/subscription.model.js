@@ -43,7 +43,12 @@ export const Subscription = sequelize.define(
       allowNull: false,
       defaultValue: false,
       field: "cancel_at_period_end"
-    }
+    },
+    languageId: {
+      type: DataTypes.BIGINT.UNSIGNED,
+      allowNull: true,
+      field: "language_id"
+    },
   },
   {
     tableName: "subscriptions",

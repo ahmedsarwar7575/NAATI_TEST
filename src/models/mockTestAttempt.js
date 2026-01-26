@@ -153,7 +153,7 @@ const MockTestAttempts = sequelize.define(
       { fields: ["mock_test_session_id", "segment_id"] },
       { fields: ["user_id", "mock_test_id"] },
     ],
-  },
+  }
 );
 
 export default MockTestAttempts;

@@ -32,7 +32,7 @@ const MockTest = sequelize.define(
     durationSeconds: {
       type: DataTypes.INTEGER.UNSIGNED,
       allowNull: true,
-      defaultValue: 20,
+      defaultValue: 1200,
       field: "duration_seconds",
     },
 
@@ -53,7 +53,7 @@ const MockTest = sequelize.define(
     tableName: "mockTest",
     underscored: true,
     timestamps: true,
-  },
+  }
 );
 
 export default MockTest;

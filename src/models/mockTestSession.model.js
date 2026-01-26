@@ -54,6 +54,11 @@ const MockTestSession = sequelize.define(
       defaultValue: DataTypes.NOW,
       field: "started_at",
     },
+    completedSeconds: {
+      type: DataTypes.INTEGER.UNSIGNED,
+      allowNull: true,
+      field: "completedSeconds",
+    },
     completedAt: {
       type: DataTypes.DATE,
       allowNull: true,
@@ -68,7 +73,7 @@ const MockTestSession = sequelize.define(
       { fields: ["mock_test_id", "user_id"] },
       { fields: ["user_id", "status"] },
     ],
-  },
+  }
 );
 
 export default MockTestSession;

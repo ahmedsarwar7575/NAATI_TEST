@@ -15,6 +15,7 @@ import mockTestCompleteRoutes from "./mockTestFlow.routes.js";
 import MockTestFinalResult from "./mockTestFinalResult.routes.js";
 import vocabularyRoutes from "./vocabulary.routes.js";
 import dashboardRoutes from "./dashboard.routes.js";
+import mockTestSessionTimeRoutes from "./mockTestSessionTime.routes.js";
 apiRouter.get("/health", (req, res) => res.json({ success: true }));
 
 apiRouter.use("/auth", authRouter);
@@ -32,3 +33,4 @@ apiRouter.use("/mockTestAttempt", mockTestCompleteRoutes);
 apiRouter.use("/", MockTestFinalResult);
 apiRouter.use("/vocabulary", vocabularyRoutes);
 apiRouter.use("/dashboard", dashboardRoutes);
+apiRouter.use("/mockTestSessionTime", mockTestSessionTimeRoutes);
