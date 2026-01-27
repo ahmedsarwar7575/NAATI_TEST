@@ -236,8 +236,8 @@ export async function createCheckoutSession(req, res) {
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
       line_items: [{ price: priceId, quantity: 1 }],
-      success_url: `https://naati.prepsmart.au/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `https://naati.prepsmart.au/failure`,
+      success_url: `http://localhost:3000/success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `http://localhost:3000/failure`,
       client_reference_id: String(userId),
       metadata: {
         userId: String(userId),
@@ -389,7 +389,7 @@ export async function verifyCheckoutSession(req, res) {
       },
     });
   } catch (err) {
-    return res.status(400).json({ error: err.message });
+    return res.status(400).json({ error: err });
   }
 }
 

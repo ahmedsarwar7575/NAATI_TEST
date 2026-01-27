@@ -9,7 +9,6 @@ export const Subscription = sequelize.define(
     userId: {
       type: DataTypes.BIGINT.UNSIGNED,
       allowNull: false,
-      unique: true, // 1 subscription row per user (simple)
       field: "user_id"
     },
 

@@ -103,8 +103,9 @@ ExamImage.belongsTo(Segment, { foreignKey: "segmentId" });
  * Subscription -> Transaction (optional link via stripeSubscriptionId)
  * ------------------------------------------------------------
  */
-User.hasOne(Subscription, { foreignKey: "userId", onDelete: "CASCADE" });
+User.hasMany(Subscription, { foreignKey: "userId", onDelete: "CASCADE" });
 Subscription.belongsTo(User, { foreignKey: "userId" });
+
 
 User.hasMany(Transaction, { foreignKey: "userId", onDelete: "CASCADE" });
 Transaction.belongsTo(User, { foreignKey: "userId" });
