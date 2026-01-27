@@ -557,3 +557,78 @@ export async function stripeWebhook(req, res) {
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 }
+export async function cancelUserSubscription(req, res) {
+  try {
+    const userId = toInt(req.body.userId ?? req.query.userId);
+    const subParam = req.params.subscriptionId
+      ? String(req.params.subscriptionId)
+      : null;
+    const cancelNowRaw = req.body.cancelNow ?? req.query.cancelNow ?? 0;
+    const cancelNow =
+      String(cancelNowRaw) === "1" ||
+      String(cancelNowRaw).toLowerCase() === "true";
+
+    if (!userId) return res.status(400).json({ error: "userId required" });
+    if (!subParam)
+      return res.status(400).json({ error: "subscriptionId required" });
+
+    let row = null;
+
+    if (subParam.startsWith("sub_")) {
+      row = await Subscription.findOne({
+        where: { userId, stripeSubscriptionId: subParam },
+      });
+    } else {
+      const dbId = toInt(subParam);
+      if (!dbId)
+        return res.status(400).json({ error: "Invalid subscriptionId" });
+      row = await Subscription.findByPk(dbId);
+      if (row && Number(row.userId) !== Number(userId)) row = null;
+    }
+
+    if (!row) return res.status(404).json({ error: "Subscription not found" });
+
+    let stripeSub = null;
+
+    if (cancelNow) {
+      stripeSub = await stripe.subscriptions.cancel(row.stripeSubscriptionId, {
+        prorate: false,
+      });
+    } else {
+      stripeSub = await stripe.subscriptions.update(row.stripeSubscriptionId, {
+        cancel_at_period_end: true,
+        expand: ["items.data.price"],
+      });
+    }
+
+    const newStatus = cancelNow ? "canceled" : stripeSub.status;
+
+    await sequelize.transaction(async (t) => {
+      await row.update(
+        {
+          status: newStatus,
+          cancelAtPeriodEnd: !!stripeSub.cancel_at_period_end,
+          currentPeriodEnd: getCurrentPeriodEndFromSub(stripeSub),
+          stripePriceId: getPriceIdFromSub(stripeSub),
+        },
+        { transaction: t }
+      );
+    });
+
+    return res.json({
+      success: true,
+      data: {
+        id: row.id,
+        userId: row.userId,
+        stripeSubscriptionId: row.stripeSubscriptionId,
+        status: row.status,
+        cancelAtPeriodEnd: row.cancelAtPeriodEnd,
+        currentPeriodEnd: row.currentPeriodEnd,
+        languageId: row.languageId ?? null,
+        cancelNow,
+      },
+    });
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
+}
