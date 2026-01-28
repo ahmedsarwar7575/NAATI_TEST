@@ -1,7 +1,11 @@
 import { Op } from "sequelize";
 import MockTest from "../models/mocketTest.model.js";
 import { Dialogue } from "../models/dialogue.model.js";
-import {Language} from "../models/language.model.js";
+import { Language } from "../models/language.model.js";
+import { User } from "../models/user.model.js";
+import { Subscription } from "../models/subscription.model.js";
+import MockTestSession from "../models/mockTestSession.model.js";
+
 const toInt = (v) => {
   if (v === undefined || v === null || v === "") return undefined;
   const n = Number(v);
@@ -87,21 +91,61 @@ export const createMockTest = async (req, res, next) => {
     return next(err);
   }
 };
-
 export const getMockTests = async (req, res, next) => {
   try {
     const page = Math.max(parseInt(req.query.page || "1", 10), 1);
-    const limit = Math.min(Math.max(parseInt(req.query.limit || "10", 10), 1), 100);
+    const limit = Math.min(
+      Math.max(parseInt(req.query.limit || "10", 10), 1),
+      100
+    );
     const offset = (page - 1) * limit;
+
+    const userId = toInt(pick(req.query, "userId", "user_id"));
+    const languageId = toInt(pick(req.query, "language_id", "languageId"));
+
+    if (!userId)
+      return res
+        .status(400)
+        .json({ success: false, message: "userId is required" });
+
+    const user = await User.findByPk(userId, { attributes: ["id", "role"] });
+    if (!user)
+      return res
+        .status(404)
+        .json({ success: false, message: "User not found" });
 
     const where = {};
 
-    const languageId = toInt(pick(req.query, "language_id", "languageId"));
-    if (languageId) where.languageId = languageId;
-
     const dialogueFilter = toInt(pick(req.query, "dialogue_id", "dialogueId"));
     if (dialogueFilter) {
-      where[Op.or] = [{ dialogueId: dialogueFilter }, { dialogueId2: dialogueFilter }];
+      where[Op.or] = [
+        { dialogueId: dialogueFilter },
+        { dialogueId2: dialogueFilter },
+      ];
+    }
+
+    let isSubscribed = false;
+
+    if (user.role === "admin") {
+      isSubscribed = true;
+    } else {
+      if (!languageId)
+        return res
+          .status(400)
+          .json({ success: false, message: "languageId is required" });
+
+      const sub = await Subscription.findOne({
+        where: {
+          userId: user.id,
+          languageId,
+          status: { [Op.in]: ["active", "trialing"] },
+          currentPeriodEnd: { [Op.gt]: new Date() },
+        },
+        order: [["currentPeriodEnd", "DESC"]],
+      });
+
+      isSubscribed = !!sub;
+      where.languageId = languageId;
     }
 
     const { rows, count } = await MockTest.findAndCountAll({
@@ -116,7 +160,44 @@ export const getMockTests = async (req, res, next) => {
       offset,
     });
 
+    if (user.role !== "admin" && !isSubscribed) {
+      const maxLimit = 1;
+      const mockTestIds = rows
+        .map((r) => Number(r.id))
+        .filter((x) => Number.isFinite(x));
+
+      const attemptCount = mockTestIds.length
+        ? await MockTestSession.count({
+            where: {
+              userId: user.id,
+              mockTestId: { [Op.in]: mockTestIds },
+            },
+            distinct: true,
+            col: "mock_test_id",
+          })
+        : 0;
+
+      const limitRemaining = Math.max(0, maxLimit - Number(attemptCount || 0));
+
+      return res.json({
+        success: true,
+        isSubscribed: false,
+        attemptCount: Number(attemptCount || 0),
+        maxLimit,
+        limitRemaining,
+        data: rows,
+        meta: {
+          page,
+          limit,
+          total: count,
+          totalPages: Math.ceil(count / limit),
+        },
+      });
+    }
+
     return res.json({
+      success: true,
+      isSubscribed,
       data: rows,
       meta: {
         page,
@@ -129,7 +210,6 @@ export const getMockTests = async (req, res, next) => {
     return next(err);
   }
 };
-
 
 export const getMockTestById = async (req, res, next) => {
   try {
