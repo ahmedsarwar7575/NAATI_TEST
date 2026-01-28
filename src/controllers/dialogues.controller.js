@@ -7,6 +7,7 @@ import { Segment } from "../models/segment.model.js";
 import { Domain } from "../models/domain.model.js";
 import { Language } from "../models/language.model.js";
 import MockTestAttempts from "../models/mockTestAttempt.js";
+import ExamAttempt from "../models/examAttempt.model.js";
 import { sequelize } from "../config/db.js";
 const toInt = (v) => {
   if (v === undefined || v === null || v === "") return undefined;
@@ -183,7 +184,7 @@ export async function createDialogue(req, res, next) {
 export async function listDialogues(req, res, next) {
   try {
     const userId = req.query.userId;
-    const languageId =  req.query.languageId;
+    const languageId = req.query.languageId;
 
     if (!userId) return res.status(400).json({ success: false, message: "userId is required" });
 
@@ -222,129 +223,111 @@ export async function listDialogues(req, res, next) {
       order: [["createdAt", "DESC"]],
     });
 
-    const plainPending = dialogues.map((d) => ({
-      ...d.toJSON(),
-      status: "pending",
-    }));
+    const dialogueIds = dialogues.map((d) => Number(d.id)).filter((x) => Number.isFinite(x));
+
+    const buildLimits = async () => {
+      const maxRapidReview = 5;
+      const maxCompleteDialogue = 1;
+
+      const rapidReviewCount = dialogueIds.length
+        ? await ExamAttempt.count({
+            where: { userId: user.id, dialogueId: { [Op.in]: dialogueIds }, examType: "rapid_review" },
+          })
+        : 0;
+
+      const completeDialogueCount = dialogueIds.length
+        ? await ExamAttempt.count({
+            where: { userId: user.id, dialogueId: { [Op.in]: dialogueIds }, examType: "complete_dialogue" },
+          })
+        : 0;
+
+      return {
+        limits: {
+          rapid_review: {
+            maxLimit: maxRapidReview,
+            attemptCount: Number(rapidReviewCount || 0),
+            limitRemaining: Math.max(0, maxRapidReview - Number(rapidReviewCount || 0)),
+          },
+          complete_dialogue: {
+            maxLimit: maxCompleteDialogue,
+            attemptCount: Number(completeDialogueCount || 0),
+            limitRemaining: Math.max(0, maxCompleteDialogue - Number(completeDialogueCount || 0)),
+          },
+        },
+      };
+    };
 
     if (!includeUserStats) {
+      const plain = dialogues.map((d) => ({ ...d.toJSON(), status: "pending" }));
+
       if (user.role !== "admin" && !isSubscribed) {
-        const dialogueIds = dialogues.map((d) => Number(d.id)).filter((x) => Number.isFinite(x));
-        const maxLimit = 1;
-
-        const attemptCount = dialogueIds.length
-          ? await MockTestAttempts.count({
-              where: {
-                userId,
-                dialogueId: { [Op.in]: dialogueIds },
-                mockTestSessionId: { [Op.is]: null },
-              },
-              distinct: true,
-              col: "dialogueId",
-            })
-          : 0;
-
-        const limitRemaining = Math.max(0, maxLimit - Number(attemptCount || 0));
-
+        const limitsPayload = await buildLimits();
         return res.json({
           success: true,
           isSubscribed: false,
-          attemptCount: Number(attemptCount || 0),
-          maxLimit,
-          limitRemaining,
-          data: { dialogues: plainPending },
+          ...limitsPayload,
+          data: { dialogues: plain },
         });
       }
 
       return res.json({
         success: true,
         isSubscribed,
-        data: { dialogues: plainPending },
+        data: { dialogues: plain },
       });
     }
 
-    const dialogueIds = dialogues.map((d) => Number(d.id)).filter((x) => Number.isFinite(x));
-
-    const segCounts = dialogueIds.length
-      ? await Segment.findAll({
-          where: { dialogueId: { [Op.in]: dialogueIds } },
-          attributes: ["dialogueId", [sequelize.fn("COUNT", sequelize.col("id")), "segmentCount"]],
-          group: ["dialogueId"],
-          raw: true,
-        })
-      : [];
-
-    const segCountMap = new Map(segCounts.map((r) => [String(r.dialogueId), Number(r.segmentCount)]));
-
     const attempts = dialogueIds.length
-      ? await MockTestAttempts.findAll({
-          where: {
-            userId,
-            dialogueId: { [Op.in]: dialogueIds },
-            mockTestSessionId: { [Op.is]: null },
-          },
-          attributes: ["dialogueId", "segmentId", "createdAt"],
+      ? await ExamAttempt.findAll({
+          where: { userId: user.id, dialogueId: { [Op.in]: dialogueIds } },
+          attributes: ["dialogueId", "examType", "status", "createdAt"],
           order: [["createdAt", "DESC"]],
           raw: true,
         })
       : [];
 
-    const uniqSegByDialogue = new Map();
+    const totalAttemptsByDialogue = new Map();
+    const completedAttemptsByDialogue = new Map();
     const lastAtByDialogue = new Map();
+    const lastTypeByDialogue = new Map();
 
     for (const a of attempts) {
       const dk = String(a.dialogueId);
-      const sk = String(a.segmentId);
-      if (!uniqSegByDialogue.has(dk)) uniqSegByDialogue.set(dk, new Set());
-      uniqSegByDialogue.get(dk).add(sk);
-
-      const ca = new Date(a.createdAt);
-      const prev = lastAtByDialogue.get(dk);
-      if (!prev || ca > prev) lastAtByDialogue.set(dk, ca);
+      totalAttemptsByDialogue.set(dk, (totalAttemptsByDialogue.get(dk) || 0) + 1);
+      if (a.status === "completed") {
+        completedAttemptsByDialogue.set(dk, (completedAttemptsByDialogue.get(dk) || 0) + 1);
+      }
+      if (!lastAtByDialogue.has(dk)) {
+        lastAtByDialogue.set(dk, new Date(a.createdAt));
+        lastTypeByDialogue.set(dk, a.examType || null);
+      }
     }
 
     const dialoguesWithStats = dialogues.map((d) => {
-      const totalSegments = segCountMap.get(String(d.id)) || 0;
-      const attemptedSegments = uniqSegByDialogue.get(String(d.id))?.size || 0;
-      const pendingSegments = Math.max(0, totalSegments - attemptedSegments);
-      const status = totalSegments > 0 && pendingSegments === 0 ? "completed" : "pending";
+      const dk = String(d.id);
+      const totalAttempts = totalAttemptsByDialogue.get(dk) || 0;
+      const completedAttempts = completedAttemptsByDialogue.get(dk) || 0;
+      const status = completedAttempts > 0 ? "completed" : "pending";
 
       return {
         ...d.toJSON(),
         status,
         userProgress: {
-          attemptedBefore: attemptedSegments > 0,
-          totalSegments,
-          attemptedSegments,
-          pendingSegments,
-          lastAttemptAt: lastAtByDialogue.get(String(d.id)) || null,
+          attemptedBefore: totalAttempts > 0,
+          totalAttempts,
+          completedAttempts,
+          lastAttemptAt: lastAtByDialogue.get(dk) || null,
+          lastExamType: lastTypeByDialogue.get(dk) || null,
         },
       };
     });
 
     if (user.role !== "admin" && !isSubscribed) {
-      const maxLimit = 1;
-
-      const attemptCount = dialogueIds.length
-        ? await MockTestAttempts.count({
-            where: {
-              userId,
-              dialogueId: { [Op.in]: dialogueIds },
-              mockTestSessionId: { [Op.is]: null },
-            },
-            distinct: true,
-            col: "dialogueId",
-          })
-        : 0;
-
-      const limitRemaining = Math.max(0, maxLimit - Number(attemptCount || 0));
-
+      const limitsPayload = await buildLimits();
       return res.json({
         success: true,
         isSubscribed: false,
-        attemptCount: Number(attemptCount || 0),
-        maxLimit,
-        limitRemaining,
+        ...limitsPayload,
         data: { dialogues: dialoguesWithStats },
       });
     }
