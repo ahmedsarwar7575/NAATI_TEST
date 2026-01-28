@@ -1,11 +1,9 @@
 import { Op } from "sequelize";
-import { sequelize } from "../config/db.js";
 import { models } from "../models/index.js";
 import { User } from "../models/user.model.js";
 import { Subscription } from "../models/subscription.model.js";
 import MockTestSession from "../models/mockTestSession.model.js";
-import MockTestAttempts from "../models/mockTestAttempt.js";
-import { Segment } from "../models/segment.model.js";
+import ExamAttempt from "../models/examAttempt.model.js";
 
 const toInt = (v) => {
   if (v === undefined || v === null || v === "") return undefined;
@@ -58,97 +56,11 @@ const getActiveSubscriptions = async (userId) => {
   }));
 };
 
-const countCompletedMockTests = async (userId) => {
-  return MockTestSession.count({
-    where: { userId, status: "completed" },
-  });
-};
-
-const countCompletedDialogues = async (userId) => {
-  const attempts = await MockTestAttempts.findAll({
-    where: {
-      userId,
-      mockTestSessionId: { [Op.is]: null },
-      dialogueId: { [Op.ne]: null },
-      segmentId: { [Op.ne]: null },
-    },
-    attributes: ["dialogueId", "segmentId"],
-    raw: true,
-  });
-
-  if (!attempts.length) return { completedDialogues: 0, attemptedDialogues: 0 };
-
-  const dialogueToSegs = new Map();
-  for (const a of attempts) {
-    const dId = Number(a.dialogueId);
-    const sId = Number(a.segmentId);
-    if (!Number.isFinite(dId) || !Number.isFinite(sId)) continue;
-    const key = String(dId);
-    if (!dialogueToSegs.has(key)) dialogueToSegs.set(key, new Set());
-    dialogueToSegs.get(key).add(String(sId));
-  }
-
-  const dialogueIds = Array.from(dialogueToSegs.keys())
-    .map((x) => Number(x))
-    .filter((x) => Number.isFinite(x));
-  if (!dialogueIds.length)
-    return { completedDialogues: 0, attemptedDialogues: 0 };
-
-  const segCounts = await Segment.findAll({
-    where: { dialogueId: { [Op.in]: dialogueIds } },
-    attributes: [
-      "dialogueId",
-      [sequelize.fn("COUNT", sequelize.col("id")), "segmentCount"],
-    ],
-    group: ["dialogueId"],
-    raw: true,
-  });
-
-  const totalSegMap = new Map(
-    segCounts.map((r) => [String(r.dialogueId), Number(r.segmentCount)])
-  );
-
-  let completed = 0;
-  for (const [dKey, segSet] of dialogueToSegs.entries()) {
-    const total = totalSegMap.get(dKey) || 0;
-    if (total > 0 && segSet.size >= total) completed += 1;
-  }
-
-  return {
-    completedDialogues: completed,
-    attemptedDialogues: dialogueToSegs.size,
-  };
-};
-
-const findRapidReviewModel = () => {
-  const names = [
-    "RapidReviewAttempt",
-    "RapidReviewAttempts",
-    "RapidReviewSession",
-    "RapidReviewSessions",
-    "RapidReview",
-    "RapidReviewResult",
-    "RapidReviewProgress",
-  ];
+const findModel = (names) => {
   for (const n of names) {
     if (models?.[n]) return models[n];
   }
   return null;
-};
-
-const countRapidReviews = async (userId) => {
-  const Model = findRapidReviewModel();
-  if (!Model) return { used: 0, sourceModel: null };
-
-  const attrs = Model.rawAttributes || {};
-  const where = { userId };
-
-  if (attrs.status) where.status = "completed";
-  else if (attrs.isCompleted) where.isCompleted = true;
-  else if (attrs.completedAt) where.completedAt = { [Op.ne]: null };
-
-  const used = await Model.count({ where });
-  return { used, sourceModel: Model?.name || null };
 };
 
 export const getUserStatus = async (req, res, next) => {
@@ -177,60 +89,134 @@ export const getUserStatus = async (req, res, next) => {
         .status(404)
         .json({ success: false, message: "User not found" });
 
-    const activeSubscriptions = await getActiveSubscriptions(userId);
+    const Language = findModel(["Language"]);
+    const MockTest = findModel(["MockTest"]);
+    const Dialogue = findModel(["Dialogue"]);
 
-    if (activeSubscriptions.length) {
-      const languageIds = Array.from(
-        new Set(
-          activeSubscriptions
-            .map((s) => Number(s.languageId))
-            .filter((x) => Number.isFinite(x))
-        )
-      );
-
-      return res.json({
-        success: true,
-        data: {
-          user: {
-            id: user.id,
-            name: user.name,
-            role: user.role,
-            preferredLanguage: user.preferredLanguage,
-            naatiCclExamDate: user.naatiCclExamDate,
-            createdAt: user.createdAt,
-          },
-          activeSubscriptionsCount: activeSubscriptions.length,
-          subscribedLanguageIds: languageIds,
-          subscriptions: activeSubscriptions,
-          isTrial: null,
-          trial: null,
-        },
+    if (!Language || !MockTest || !Dialogue) {
+      return res.status(500).json({
+        success: false,
+        message: "Required models not found (Language/MockTest/Dialogue)",
       });
     }
 
-    const mockTestsUsed = await countCompletedMockTests(userId);
-    const { completedDialogues, attemptedDialogues } =
-      await countCompletedDialogues(userId);
-    const rapid = await countRapidReviews(userId);
+    const languages = await Language.findAll({ order: [["id", "ASC"]] });
+    const activeSubscriptions = await getActiveSubscriptions(userId);
+
+    const subByLanguageId = new Map();
+    for (const s of activeSubscriptions) {
+      const lid = Number(s.languageId);
+      if (!Number.isFinite(lid)) continue;
+      if (!subByLanguageId.has(lid)) subByLanguageId.set(lid, s);
+    }
+
+    const subscribedLanguageIds = Array.from(subByLanguageId.keys());
 
     const limits = {
       mockTest: 1,
-      rapidReview: 5,
       dialogue: 1,
+      rapidReview: 5,
     };
 
-    const used = {
-      mockTest: mockTestsUsed,
-      rapidReview: rapid.used,
-      dialogue: completedDialogues,
-      attemptedDialogues,
-    };
+    const mockTests = await MockTest.findAll({
+      attributes: ["id", "languageId"],
+      raw: true,
+    });
 
-    const remaining = {
-      mockTest: Math.max(0, limits.mockTest - used.mockTest),
-      rapidReview: Math.max(0, limits.rapidReview - used.rapidReview),
-      dialogue: Math.max(0, limits.dialogue - used.dialogue),
-    };
+    const mockTestIdToLang = new Map();
+    for (const mt of mockTests) {
+      const mid = Number(mt.id);
+      const lid = Number(mt.languageId);
+      if (Number.isFinite(mid) && Number.isFinite(lid))
+        mockTestIdToLang.set(String(mid), lid);
+    }
+
+    const dialogues = await Dialogue.findAll({
+      attributes: ["id", "languageId"],
+      raw: true,
+    });
+
+    const dialogueIdToLang = new Map();
+    for (const d of dialogues) {
+      const did = Number(d.id);
+      const lid = Number(d.languageId);
+      if (Number.isFinite(did) && Number.isFinite(lid))
+        dialogueIdToLang.set(String(did), lid);
+    }
+
+    const completedSessions = await MockTestSession.findAll({
+      where: { userId, status: "completed" },
+      attributes: ["mockTestId"],
+      raw: true,
+    });
+
+    const mockUsedByLang = new Map();
+    for (const s of completedSessions) {
+      const lid = mockTestIdToLang.get(String(s.mockTestId));
+      if (!Number.isFinite(lid)) continue;
+      mockUsedByLang.set(lid, (mockUsedByLang.get(lid) || 0) + 1);
+    }
+
+    const examAttempts = await ExamAttempt.findAll({
+      where: { userId },
+      attributes: ["dialogueId", "examType"],
+      raw: true,
+    });
+
+    const rapidUsedByLang = new Map();
+    const completeUsedByLang = new Map();
+
+    for (const a of examAttempts) {
+      const lid = dialogueIdToLang.get(String(a.dialogueId));
+      if (!Number.isFinite(lid)) continue;
+
+      if (a.examType === "rapid_review") {
+        rapidUsedByLang.set(lid, (rapidUsedByLang.get(lid) || 0) + 1);
+      } else if (a.examType === "complete_dialogue") {
+        completeUsedByLang.set(lid, (completeUsedByLang.get(lid) || 0) + 1);
+      }
+    }
+
+    const languagesWithAccess = languages.map((l) => {
+      const lid = Number(l.id);
+      const subscribed =
+        user.role === "admin" ? true : subByLanguageId.has(lid);
+
+      const base = {
+        ...l.toJSON(),
+        isSubscribed: subscribed,
+      };
+
+      if (subscribed) {
+        base.subscription = subByLanguageId.get(lid) ?? null;
+        return base;
+      }
+
+      const used = {
+        mockTest: mockUsedByLang.get(lid) || 0,
+        dialogue: completeUsedByLang.get(lid) || 0,
+        rapidReview: rapidUsedByLang.get(lid) || 0,
+      };
+
+      const remaining = {
+        mockTest: Math.max(0, limits.mockTest - used.mockTest),
+        dialogue: Math.max(0, limits.dialogue - used.dialogue),
+        rapidReview: Math.max(0, limits.rapidReview - used.rapidReview),
+      };
+
+      base.trial = {
+        limits,
+        used,
+        remaining,
+        canUse: {
+          mockTest: remaining.mockTest > 0,
+          dialogue: remaining.dialogue > 0,
+          rapidReview: remaining.rapidReview > 0,
+        },
+      };
+
+      return base;
+    });
 
     return res.json({
       success: true,
@@ -243,21 +229,10 @@ export const getUserStatus = async (req, res, next) => {
           naatiCclExamDate: user.naatiCclExamDate,
           createdAt: user.createdAt,
         },
-        activeSubscriptionsCount: 0,
-        subscribedLanguageIds: [],
-        subscriptions: [],
-        isTrial: true,
-        trial: {
-          limits,
-          used,
-          remaining,
-          canUse: {
-            mockTest: remaining.mockTest > 0,
-            rapidReview: remaining.rapidReview > 0,
-            dialogue: remaining.dialogue > 0,
-          },
-          rapidReviewSourceModel: rapid.sourceModel,
-        },
+        activeSubscriptionsCount: activeSubscriptions.length,
+        subscribedLanguageIds,
+        subscriptions: activeSubscriptions,
+        languages: languagesWithAccess,
       },
     });
   } catch (e) {
