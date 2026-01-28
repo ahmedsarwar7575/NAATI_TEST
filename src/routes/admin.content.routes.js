@@ -28,7 +28,7 @@ adminContentRouter.put("/domains/:id", updateDomain);
 adminContentRouter.delete("/domains/:id", deleteDomain);
 
 adminContentRouter.post("/dialogues", createDialogue);
-adminContentRouter.get("/dialogues/:userId", listDialogues);
+adminContentRouter.get("/dialogues", listDialogues);
 adminContentRouter.get("/dialogues/:id", getDialogue);
 adminContentRouter.put("/dialogues/:id", updateDialogue);
 adminContentRouter.delete("/dialogues/:id", deleteDialogue);

@@ -7,7 +7,7 @@ import { Segment } from "../models/segment.model.js";
 import { Domain } from "../models/domain.model.js";
 import { Language } from "../models/language.model.js";
 import MockTestAttempts from "../models/mockTestAttempt.js";
-
+import { sequelize } from "../config/db.js";
 const toInt = (v) => {
   if (v === undefined || v === null || v === "") return undefined;
   const n = Number(v);
@@ -182,29 +182,39 @@ export async function createDialogue(req, res, next) {
 
 export async function listDialogues(req, res, next) {
   try {
-    const userId = toInt(req.params.userId ?? req.query.userId);
-    if (!userId)
-      return res
-        .status(400)
-        .json({ success: false, message: "userId is required" });
+    const userId = req.query.userId;
+    const languageId =  req.query.languageId;
+
+    if (!userId) return res.status(400).json({ success: false, message: "userId is required" });
 
     const includeUserStats =
-      String(
-        req.query.includeUserStats ?? req.query.include_user_stats ?? "0"
-      ) === "1";
+      String(req.query.includeUserStats ?? req.query.include_user_stats ?? "0") === "1";
 
     const user = await User.findByPk(userId, { attributes: ["id", "role"] });
-    if (!user)
-      return res
-        .status(404)
-        .json({ success: false, message: "User not found" });
+    if (!user) return res.status(404).json({ success: false, message: "User not found" });
+
+    let isSubscribed = false;
+
+    if (user.role === "admin") {
+      isSubscribed = true;
+    } else {
+      if (!languageId) return res.status(400).json({ success: false, message: "languageId is required" });
+
+      const sub = await Subscription.findOne({
+        where: {
+          userId: user.id,
+          languageId,
+          status: { [Op.in]: ["active", "trialing"] },
+          currentPeriodEnd: { [Op.gt]: new Date() },
+        },
+        order: [["currentPeriodEnd", "DESC"]],
+      });
+
+      isSubscribed = !!sub;
+    }
 
     const where = {};
-    if (user.role !== "admin") {
-      const allowedLanguageIds = await getUserAllowedLanguageIds(userId);
-      if (allowedLanguageIds.length)
-        where.languageId = { [Op.in]: allowedLanguageIds };
-    }
+    if (user.role !== "admin") where.languageId = languageId;
 
     const dialogues = await Dialogue.findAll({
       where,
@@ -212,42 +222,72 @@ export async function listDialogues(req, res, next) {
       order: [["createdAt", "DESC"]],
     });
 
+    const plainPending = dialogues.map((d) => ({
+      ...d.toJSON(),
+      status: "pending",
+    }));
+
     if (!includeUserStats) {
-      const plain = dialogues.map((d) => ({
-        ...d.toJSON(),
-        status: "pending",
-      }));
-      return res.json({ success: true, data: { dialogues: plain } });
+      if (user.role !== "admin" && !isSubscribed) {
+        const dialogueIds = dialogues.map((d) => Number(d.id)).filter((x) => Number.isFinite(x));
+        const maxLimit = 1;
+
+        const attemptCount = dialogueIds.length
+          ? await MockTestAttempts.count({
+              where: {
+                userId,
+                dialogueId: { [Op.in]: dialogueIds },
+                mockTestSessionId: { [Op.is]: null },
+              },
+              distinct: true,
+              col: "dialogueId",
+            })
+          : 0;
+
+        const limitRemaining = Math.max(0, maxLimit - Number(attemptCount || 0));
+
+        return res.json({
+          success: true,
+          isSubscribed: false,
+          attemptCount: Number(attemptCount || 0),
+          maxLimit,
+          limitRemaining,
+          data: { dialogues: plainPending },
+        });
+      }
+
+      return res.json({
+        success: true,
+        isSubscribed,
+        data: { dialogues: plainPending },
+      });
     }
 
-    const dialogueIds = dialogues
-      .map((d) => Number(d.id))
-      .filter((x) => Number.isFinite(x));
+    const dialogueIds = dialogues.map((d) => Number(d.id)).filter((x) => Number.isFinite(x));
 
-    const segCounts = await Segment.findAll({
-      where: { dialogueId: { [Op.in]: dialogueIds } },
-      attributes: [
-        "dialogueId",
-        [sequelize.fn("COUNT", sequelize.col("id")), "segmentCount"],
-      ],
-      group: ["dialogueId"],
-      raw: true,
-    });
+    const segCounts = dialogueIds.length
+      ? await Segment.findAll({
+          where: { dialogueId: { [Op.in]: dialogueIds } },
+          attributes: ["dialogueId", [sequelize.fn("COUNT", sequelize.col("id")), "segmentCount"]],
+          group: ["dialogueId"],
+          raw: true,
+        })
+      : [];
 
-    const segCountMap = new Map(
-      segCounts.map((r) => [String(r.dialogueId), Number(r.segmentCount)])
-    );
+    const segCountMap = new Map(segCounts.map((r) => [String(r.dialogueId), Number(r.segmentCount)]));
 
-    const attempts = await MockTestAttempts.findAll({
-      where: {
-        userId,
-        dialogueId: { [Op.in]: dialogueIds },
-        mockTestSessionId: { [Op.is]: null },
-      },
-      attributes: ["dialogueId", "segmentId", "createdAt"],
-      order: [["createdAt", "DESC"]],
-      raw: true,
-    });
+    const attempts = dialogueIds.length
+      ? await MockTestAttempts.findAll({
+          where: {
+            userId,
+            dialogueId: { [Op.in]: dialogueIds },
+            mockTestSessionId: { [Op.is]: null },
+          },
+          attributes: ["dialogueId", "segmentId", "createdAt"],
+          order: [["createdAt", "DESC"]],
+          raw: true,
+        })
+      : [];
 
     const uniqSegByDialogue = new Map();
     const lastAtByDialogue = new Map();
@@ -267,8 +307,7 @@ export async function listDialogues(req, res, next) {
       const totalSegments = segCountMap.get(String(d.id)) || 0;
       const attemptedSegments = uniqSegByDialogue.get(String(d.id))?.size || 0;
       const pendingSegments = Math.max(0, totalSegments - attemptedSegments);
-      const status =
-        totalSegments > 0 && pendingSegments === 0 ? "completed" : "pending";
+      const status = totalSegments > 0 && pendingSegments === 0 ? "completed" : "pending";
 
       return {
         ...d.toJSON(),
@@ -283,7 +322,38 @@ export async function listDialogues(req, res, next) {
       };
     });
 
-    return res.json({ success: true, data: { dialogues: dialoguesWithStats } });
+    if (user.role !== "admin" && !isSubscribed) {
+      const maxLimit = 1;
+
+      const attemptCount = dialogueIds.length
+        ? await MockTestAttempts.count({
+            where: {
+              userId,
+              dialogueId: { [Op.in]: dialogueIds },
+              mockTestSessionId: { [Op.is]: null },
+            },
+            distinct: true,
+            col: "dialogueId",
+          })
+        : 0;
+
+      const limitRemaining = Math.max(0, maxLimit - Number(attemptCount || 0));
+
+      return res.json({
+        success: true,
+        isSubscribed: false,
+        attemptCount: Number(attemptCount || 0),
+        maxLimit,
+        limitRemaining,
+        data: { dialogues: dialoguesWithStats },
+      });
+    }
+
+    return res.json({
+      success: true,
+      isSubscribed,
+      data: { dialogues: dialoguesWithStats },
+    });
   } catch (e) {
     return next(e);
   }
