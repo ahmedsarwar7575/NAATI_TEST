@@ -109,6 +109,7 @@ Subscription.belongsTo(User, { foreignKey: "userId" });
 
 User.hasMany(Transaction, { foreignKey: "userId", onDelete: "CASCADE" });
 Transaction.belongsTo(User, { foreignKey: "userId" });
+MockTest.belongsTo(Language, { foreignKey: "languageId", as: "language" });
 
 // optional (nice)
 Subscription.hasMany(Transaction, {

@@ -17,6 +17,7 @@ import vocabularyRoutes from "./vocabulary.routes.js";
 import dashboardRoutes from "./dashboard.routes.js";
 import mockTestSessionTimeRoutes from "./mockTestSessionTime.routes.js";
 import userStatusRoutes from "./userStatus.routes.js";
+import dialogueAttemptsTimeRoutes from "./dialogueAttemptsTime.routes.js";
 apiRouter.get("/health", (req, res) => res.json({ success: true }));
 
 apiRouter.use("/auth", authRouter);
@@ -36,3 +37,4 @@ apiRouter.use("/vocabulary", vocabularyRoutes);
 apiRouter.use("/dashboard", dashboardRoutes);
 apiRouter.use("/mockTestSessionTime", mockTestSessionTimeRoutes);
 apiRouter.use("/status", userStatusRoutes);
+apiRouter.use("/dialogueTime", dialogueAttemptsTimeRoutes);

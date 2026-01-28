@@ -1,7 +1,7 @@
 import { Op } from "sequelize";
 import MockTest from "../models/mocketTest.model.js";
 import { Dialogue } from "../models/dialogue.model.js";
-
+import {Language} from "../models/language.model.js";
 const toInt = (v) => {
   if (v === undefined || v === null || v === "") return undefined;
   const n = Number(v);
@@ -91,10 +91,7 @@ export const createMockTest = async (req, res, next) => {
 export const getMockTests = async (req, res, next) => {
   try {
     const page = Math.max(parseInt(req.query.page || "1", 10), 1);
-    const limit = Math.min(
-      Math.max(parseInt(req.query.limit || "10", 10), 1),
-      100,
-    );
+    const limit = Math.min(Math.max(parseInt(req.query.limit || "10", 10), 1), 100);
     const offset = (page - 1) * limit;
 
     const where = {};
@@ -104,15 +101,13 @@ export const getMockTests = async (req, res, next) => {
 
     const dialogueFilter = toInt(pick(req.query, "dialogue_id", "dialogueId"));
     if (dialogueFilter) {
-      where[Op.or] = [
-        { dialogueId: dialogueFilter },
-        { dialogueId2: dialogueFilter },
-      ];
+      where[Op.or] = [{ dialogueId: dialogueFilter }, { dialogueId2: dialogueFilter }];
     }
 
     const { rows, count } = await MockTest.findAndCountAll({
       where,
       include: [
+        { model: Language, as: "language" },
         { model: Dialogue, as: "dialogue1" },
         { model: Dialogue, as: "dialogue2" },
       ],
@@ -135,6 +130,7 @@ export const getMockTests = async (req, res, next) => {
   }
 };
 
+
 export const getMockTestById = async (req, res, next) => {
   try {
     const id = toInt(req.params.id);
@@ -142,6 +138,7 @@ export const getMockTestById = async (req, res, next) => {
 
     const mockTest = await MockTest.findByPk(id, {
       include: [
+        { model: Language, as: "language" },
         { model: Dialogue, as: "dialogue1" },
         { model: Dialogue, as: "dialogue2" },
       ],

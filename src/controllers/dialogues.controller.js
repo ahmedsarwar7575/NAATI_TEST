@@ -213,27 +213,30 @@ export async function listDialogues(req, res, next) {
     });
 
     if (!includeUserStats) {
-      return res.json({ success: true, data: { dialogues } });
+      const plain = dialogues.map((d) => ({
+        ...d.toJSON(),
+        status: "pending",
+      }));
+      return res.json({ success: true, data: { dialogues: plain } });
     }
 
     const dialogueIds = dialogues
       .map((d) => Number(d.id))
       .filter((x) => Number.isFinite(x));
 
-    const segCounts = await Segment.count({
+    const segCounts = await Segment.findAll({
       where: { dialogueId: { [Op.in]: dialogueIds } },
+      attributes: [
+        "dialogueId",
+        [sequelize.fn("COUNT", sequelize.col("id")), "segmentCount"],
+      ],
       group: ["dialogueId"],
+      raw: true,
     });
 
-    const segCountMap = new Map();
-    if (Array.isArray(segCounts)) {
-      for (const r of segCounts) {
-        const did = r?.dialogueId ?? r?.dialogue_id;
-        const cnt = r?.count;
-        if (did !== undefined && cnt !== undefined)
-          segCountMap.set(String(did), Number(cnt));
-      }
-    }
+    const segCountMap = new Map(
+      segCounts.map((r) => [String(r.dialogueId), Number(r.segmentCount)])
+    );
 
     const attempts = await MockTestAttempts.findAll({
       where: {
@@ -243,39 +246,33 @@ export async function listDialogues(req, res, next) {
       },
       attributes: ["dialogueId", "segmentId", "createdAt"],
       order: [["createdAt", "DESC"]],
+      raw: true,
     });
 
-    const latestByDialogueSegment = new Map();
+    const uniqSegByDialogue = new Map();
     const lastAtByDialogue = new Map();
 
     for (const a of attempts) {
-      const key = `${a.dialogueId}|${a.segmentId}`;
-      if (!latestByDialogueSegment.has(key))
-        latestByDialogueSegment.set(key, a);
-
       const dk = String(a.dialogueId);
+      const sk = String(a.segmentId);
+      if (!uniqSegByDialogue.has(dk)) uniqSegByDialogue.set(dk, new Set());
+      uniqSegByDialogue.get(dk).add(sk);
+
       const ca = new Date(a.createdAt);
       const prev = lastAtByDialogue.get(dk);
       if (!prev || ca > prev) lastAtByDialogue.set(dk, ca);
     }
 
-    const attemptedSegmentsByDialogue = new Map();
-    for (const key of latestByDialogueSegment.keys()) {
-      const [dId] = key.split("|");
-      attemptedSegmentsByDialogue.set(
-        dId,
-        (attemptedSegmentsByDialogue.get(dId) || 0) + 1
-      );
-    }
-
     const dialoguesWithStats = dialogues.map((d) => {
       const totalSegments = segCountMap.get(String(d.id)) || 0;
-      const attemptedSegments =
-        attemptedSegmentsByDialogue.get(String(d.id)) || 0;
+      const attemptedSegments = uniqSegByDialogue.get(String(d.id))?.size || 0;
       const pendingSegments = Math.max(0, totalSegments - attemptedSegments);
+      const status =
+        totalSegments > 0 && pendingSegments === 0 ? "completed" : "pending";
 
       return {
         ...d.toJSON(),
+        status,
         userProgress: {
           attemptedBefore: attemptedSegments > 0,
           totalSegments,

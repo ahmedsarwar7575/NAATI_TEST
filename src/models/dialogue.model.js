@@ -13,7 +13,11 @@ export const Dialogue = sequelize.define(
     languageId: { type: DataTypes.BIGINT.UNSIGNED, allowNull: false },
     title: { type: DataTypes.STRING(160), allowNull: false },
     description: { type: DataTypes.TEXT, allowNull: true },
-    duration: { type: DataTypes.INTEGER.UNSIGNED, allowNull: true },
+    duration: {
+      type: DataTypes.INTEGER.UNSIGNED,
+      allowNull: true,
+      defaultValue: 1200,
+    },
     difficulty: {
       type: DataTypes.ENUM("easy", "medium", "hard"),
       allowNull: false,
@@ -24,5 +28,5 @@ export const Dialogue = sequelize.define(
     tableName: "dialogues",
     timestamps: true,
     underscored: true,
-  },
+  }
 );

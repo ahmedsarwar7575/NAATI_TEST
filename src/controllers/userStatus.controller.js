@@ -215,7 +215,7 @@ export const getUserStatus = async (req, res, next) => {
 
     const limits = {
       mockTest: 1,
-      rapidReview: 3,
+      rapidReview: 5,
       dialogue: 1,
     };
 

@@ -37,7 +37,12 @@ const MockTestAttempts = sequelize.define(
       allowNull: false,
       field: "segment_id",
     },
-
+    completedSeconds: {
+      type: DataTypes.INTEGER.UNSIGNED,
+      allowNull: true,
+      defaultValue: 0,
+      field: "completedSeconds",
+    },
     status: {
       type: DataTypes.ENUM("submitted", "scored"),
       allowNull: false,
