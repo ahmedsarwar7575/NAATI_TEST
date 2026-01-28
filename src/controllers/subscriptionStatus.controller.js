@@ -1,6 +1,6 @@
 import { Subscription } from "../models/subscription.model.js";
 import { User } from "../models/user.model.js";
-
+import { Language } from "../models/language.model.js";
 function computeIsSubscription(sub) {
   const now = new Date();
   const end = sub?.currentPeriodEnd ? new Date(sub.currentPeriodEnd) : null;
@@ -47,6 +47,7 @@ function mapSubWithUser(row) {
           stripeCustomerId: sub.stripeCustomerId,
           createdAt: sub.createdAt,
           updatedAt: sub.updatedAt,
+          language: sub.language || null,
         }
       : null,
   };
@@ -98,7 +99,10 @@ export async function getAllSubscriptions(req, res) {
 
     const subs = await Subscription.findAll({
       where,
-      include: [{ model: User, attributes: userAttrs }],
+      include: [
+        { model: User, attributes: userAttrs },
+        { model: Language, as: "language" },
+      ],
       order: [["id", "DESC"]],
       limit,
       offset,
@@ -112,19 +116,19 @@ export async function getAllSubscriptions(req, res) {
 
 export async function getSubOfAUser(req, res) {
   try {
-    const userId = Number(
-      req.params.userId || req.query.userId || req.body.userId
-    );
+    const userId = Number(req.params.userId || req.query.userId || req.body.userId);
     if (!userId) return res.status(400).json({ error: "userId required" });
 
-    const sub = await Subscription.findOne({
+    const subs = await Subscription.findAll({
       where: { userId },
-      include: [{ model: User, attributes: userAttrs }],
+      include: [
+        { model: User, attributes: userAttrs },
+        { model: Language, as: "language" },
+      ],
+      order: [["id", "DESC"]],
     });
 
-    if (!sub) return res.status(404).json({ error: "Subscription not found" });
-
-    return res.json(mapSubWithUser(sub));
+    return res.json(subs.map(mapSubWithUser));
   } catch (e) {
     return res.status(400).json({ error: e.message });
   }
@@ -136,7 +140,10 @@ export async function getOneSub(req, res) {
     if (!id) return res.status(400).json({ error: "id required" });
 
     const sub = await Subscription.findByPk(id, {
-      include: [{ model: User, attributes: userAttrs }],
+      include: [
+        { model: User, attributes: userAttrs },
+        { model: Language, as: "language" },
+      ],
     });
 
     if (!sub) return res.status(404).json({ error: "Subscription not found" });
@@ -146,6 +153,7 @@ export async function getOneSub(req, res) {
     return res.status(400).json({ error: e.message });
   }
 }
+
 
 export async function updateSub(req, res) {
   try {
